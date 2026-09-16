@@ -39,12 +39,15 @@ pass:
    `ctx.remote === true` (MCP callers). Independent of the env flag. Remote
    agents can never submit shell jobs. `MinionQueue.add('shell', ...)` has its
    own guard too, so an in-process handler can't programmatically bypass this.
-2. **Env flag.** The shell handler is ALWAYS registered on the worker, but it
-   is guarded: unless `GBRAIN_ALLOW_SHELL_JOBS=1` is set on the worker process,
-   a claimed shell job throws `UnrecoverableError` and goes straight to `dead`
-   (no retries). Default: off. Your agent opts in per-host. (Always-registered
-   guarded mode — not "unregistered", so unflagged workers fail shell jobs
-   loudly instead of leaving them `waiting` forever.)
+2. **Worker opt-in.** The shell handler is ALWAYS registered on the worker, but
+   it is guarded: unless the worker was started with
+   `gbrain jobs work --allow-shell-jobs` (equivalently, `GBRAIN_ALLOW_SHELL_JOBS=1`
+   exported in the worker's environment), a claimed shell job throws
+   `UnrecoverableError` and goes straight to `dead` (no retries). Default: off.
+   Your agent opts in per-host. A `.env` file in the worker's working directory
+   cannot set the variable — gbrain ignores it there. (Always-registered guarded
+   mode — not "unregistered", so unflagged workers fail shell jobs loudly
+   instead of leaving them `waiting` forever.)
 
 **What the env allowlist does AND does not do.** Shell jobs run with a minimal
 env: `PATH, HOME, USER, LANG, TZ, NODE_ENV`. Your secrets like `OPENAI_API_KEY`
@@ -76,7 +79,7 @@ secrets in `env:` instead.
 On one terminal, start a persistent worker:
 
 ```bash
-GBRAIN_ALLOW_SHELL_JOBS=1 gbrain jobs work
+gbrain jobs work --allow-shell-jobs        # or: GBRAIN_ALLOW_SHELL_JOBS=1 gbrain jobs work
 ```
 
 Rewrite crontab to submit shell jobs (no `--follow`):
@@ -253,7 +256,7 @@ cat ~/.gbrain/audit/shell-jobs-*.jsonl | jq '.'
 # The handler is always registered but guarded: an unflagged worker that claims
 # a shell job dead-letters it immediately (UnrecoverableError, no retries).
 gbrain jobs list --status dead --name shell
-# → error_text: "shell handler disabled on this worker (set GBRAIN_ALLOW_SHELL_JOBS=1 ...)"
+# → error_text: "shell handler disabled on this worker (start it with --allow-shell-jobs or GBRAIN_ALLOW_SHELL_JOBS=1 ...)"
 # `waiting` pileups mean NO worker is running at all (flagged or not) — check
 # `gbrain jobs supervisor status` in that case.
 ```
@@ -287,7 +290,7 @@ gbrain jobs list --status dead --name shell
 | `shell: inherit name "<X>" must match [a-z][a-z0-9_]*` | Name failed snake_case regex (uppercase, leading digit/underscore, special char). | Use the config-key name verbatim — `database_url`, not `DATABASE_URL`. |
 | `shell: inherit requested "<X>" but worker has no <X> configured` | Worker can't resolve the requested name from `loadConfig()`. | Run `gbrain config set <X> <value>` on the worker host, OR check the config file at `~/.gbrain/config.json`. |
 | `shell: redact_secrets must be a boolean if set` | Caller passed a non-boolean for `redact_secrets`. | Pass `true` or `false` (or omit). The CLI `--redact-secrets` flag sets it automatically. |
-| `permission_denied: shell jobs cannot be submitted over MCP` | An MCP client tried to submit a shell job. By design CLI-only. | Submit from CLI or via a trusted operation handler (`ctx.remote === false`). |
-| `protected job name 'shell' requires CLI or operation-local submitter` | A caller invoked `MinionQueue.add('shell', ...)` without the `trusted` opt-in. | Pass `{ allowProtectedSubmit: true }` as the 4th arg. CLI and `submit_job` do this automatically. |
+| `permission_denied` with an unsupported remote job message | An MCP client tried to submit a shell job. Shell submission requires local authority. | Submit from the local CLI or an authorized application handler. |
+| `protected job name 'shell' requires CLI or operation-local submitter` | An application called `MinionQueue.add('shell', ...)` without the protected-job opt-in. | An authorized local submitter supplies `{ allowProtectedSubmit: true }` as the fourth argument. The local CLI handles this; remote `submit_job` cannot grant it. |
 | `aborted: timeout` / `aborted: cancel` / `aborted: shutdown` / `aborted: lock-lost` | The worker's abort signal fired mid-execution. Child got SIGTERM, 5s grace, then SIGKILL. | Expected: timeout / user cancel / deploy restart / stall. Inspect `gbrain jobs get` to see which. |
 | `exit N: <stderr_tail_500>` | Script exited non-zero. | Read `stderr_tail` in `gbrain jobs get`. |

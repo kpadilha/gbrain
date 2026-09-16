@@ -1,3 +1,4 @@
+import { GRANT_COLUMNS_SQL } from './grants/schema.ts';
 import type { PageReadScope } from './types.ts';
 import type { PageReadPolicy } from './types.ts';
 import { readRelationalFanout, readAliases, readBacklinkCounts, readAdjacencyBoosts, readContentFlags, readExtractionStates, readEffectiveDates, readSalienceScores } from './search/read-enrichment.ts';
@@ -69,6 +70,7 @@ import { acquireLock, releaseLock, type LockHandle } from './pglite-lock.ts';
 // connect() catch. No cycle: pglite-repair.ts imports nothing from this file.
 import { attemptWalRepairAndRetry, closeRepairEpisodeIfOpen, type WalRepairReceipt } from './pglite-repair.ts';
 import { getFtsLanguage } from './fts-language.ts';
+import { splitEmbeddingSignature, currentSpaceChunkPredicate } from './embedding-invalidation.ts';
 import type {
   Page, PageInput, PageFilters, PageType,
   Chunk, ChunkInput, StaleChunkRow, StalePageRow, ChunklessPageRow,
@@ -333,29 +335,24 @@ export function computeSnapshotSchemaHash(
   crypto: typeof import('node:crypto'),
   fs: typeof import('node:fs'),
 ): string | null {
-  // Instrumentation-immune schema hash: the raw FILE BYTES of migrate.ts +
-  // pglite-schema.ts, resolved relative to this module.
-  //
-  // The previous form hashed the in-memory MIGRATIONS array, folding each
-  // migration handler's Function.prototype.toString (W0 D5.13 — editing a
-  // handler must stale the snapshot). But coverage instrumentation rewrites
-  // LOADED function bodies, so under `bun test --coverage` (every CI shard)
-  // the runtime hash never matched the plain-`bun run` builder's, and every
-  // CI engine silently cold-initted ("snapshot stale") — a permanent
-  // CI-vs-local timing divergence that amplified ordering flakes. File bytes
-  // keep the D5.13 property (a handler edit edits the file) and are identical
-  // under any loader, runtime, or instrumentation. They are also the same
-  // inputs CI's snapshot-cache key hashes, so builder, engine, and cache can
-  // no longer disagree in kind.
-  //
-  // Returns null when the source files are unreadable (compiled binary) —
-  // the snapshot is a dev/test fixture; no-snapshot is the safe answer there.
+  // Raw file bytes remain identical under coverage instrumentation, unlike
+  // Function.toString(). Include imported SQL and migration helpers: hashing
+  // only the two entry modules silently reused old grant CHECK constraints.
+  // Keep CI's snapshot cache inputs in sync when adding a schema dependency.
+  // Unreadable sources (compiled binary) safely disable this test optimization.
   try {
     const hash = crypto.createHash('sha256');
-    hash.update('files:v2\n');
-    hash.update(fs.readFileSync(new URL('./migrate.ts', import.meta.url)));
-    hash.update('\n--\n');
-    hash.update(fs.readFileSync(new URL('./pglite-schema.ts', import.meta.url)));
+    hash.update('files:v3\n');
+    for (const file of [
+      'migrate.ts', 'pglite-schema.ts', 'fts-language.ts', 'vector-index.ts', 'ai/defaults.ts',
+      'timeline-dedup-repair.ts', 'pages-upsert-arbiter.ts', 'link-extraction.ts',
+      'grants/schema.ts', 'grants/migration.ts', 'grants/model.ts', 'grants/service.ts', 'grants/profiles.ts',
+      'scope.ts', 'sql-query.ts', 'minions/tools/brain-allowlist.ts', 'facts/withdrawal-schema.ts',
+    ]) {
+      hash.update(`${file}\n`);
+      hash.update(fs.readFileSync(new URL(`./${file}`, import.meta.url)));
+      hash.update('\n--\n');
+    }
     return hash.digest('hex');
   } catch {
     return null;
@@ -1131,6 +1128,9 @@ export class PGLiteEngine implements BrainEngine {
                 WHERE table_schema='public' AND table_name='oauth_clients' AND column_name='surface') AS oauth_clients_surface_exists,
         EXISTS (SELECT 1 FROM information_schema.columns
                 WHERE table_schema='public' AND table_name='oauth_clients' AND column_name='surface_set_by') AS oauth_clients_surface_set_by_exists,
+        (SELECT COUNT(*) = 6 FROM information_schema.columns
+          WHERE table_schema='public' AND table_name='oauth_clients'
+            AND column_name IN ('allowed_operations', 'delegated_slug_prefixes', 'delegated_namespace', 'grant_profile', 'grant_revision', 'grant_repair_reasons')) AS oauth_client_grants_exist,
         EXISTS (SELECT 1 FROM information_schema.tables
                 WHERE table_schema='public' AND table_name='sources') AS sources_exists,
         EXISTS (SELECT 1 FROM information_schema.columns
@@ -1178,7 +1178,11 @@ export class PGLiteEngine implements BrainEngine {
         EXISTS (SELECT 1 FROM information_schema.columns
                 WHERE table_schema='public' AND table_name='minion_jobs' AND column_name='private_queue_owner_token') AS minion_jobs_pq_token_exists,
         EXISTS (SELECT 1 FROM information_schema.columns
-                WHERE table_schema='public' AND table_name='minion_jobs' AND column_name='private_queue_lease_until') AS minion_jobs_pq_lease_exists
+                WHERE table_schema='public' AND table_name='minion_jobs' AND column_name='private_queue_lease_until') AS minion_jobs_pq_lease_exists,
+        EXISTS (SELECT 1 FROM information_schema.columns
+                WHERE table_schema='public' AND table_name='minion_jobs' AND column_name='submission_authority') AS minion_jobs_submission_authority_exists,
+        EXISTS (SELECT 1 FROM information_schema.columns
+                WHERE table_schema='public' AND table_name='minion_jobs' AND column_name='claim_generation') AS minion_jobs_claim_generation_exists
     `);
     const probe = rows[0] as {
       pages_exists: boolean;
@@ -1207,6 +1211,7 @@ export class PGLiteEngine implements BrainEngine {
       oauth_clients_federated_read_exists: boolean;
       oauth_clients_surface_exists: boolean;
       oauth_clients_surface_set_by_exists: boolean;
+      oauth_client_grants_exist: boolean;
       sources_exists: boolean;
       sources_archived_exists: boolean;
       sources_archived_at_exists: boolean;
@@ -1231,6 +1236,8 @@ export class PGLiteEngine implements BrainEngine {
       minion_jobs_pq_owner_exists: boolean;
       minion_jobs_pq_token_exists: boolean;
       minion_jobs_pq_lease_exists: boolean;
+      minion_jobs_submission_authority_exists: boolean;
+      minion_jobs_claim_generation_exists: boolean;
     };
 
     const needsPagesBootstrap = probe.pages_exists && !probe.source_id_exists;
@@ -1268,6 +1275,7 @@ export class PGLiteEngine implements BrainEngine {
     // blob's CREATE TABLE — the exact v121 mask class — so the bootstrap adds
     // them defense-in-depth (and satisfies the MIGRATIONS ADD COLUMN
     // coverage gate). They ship in one migration and go missing together.
+    const needsOauthClientGrants = probe.oauth_clients_exists && !probe.oauth_client_grants_exist;
     const needsOauthClientsSurface = probe.oauth_clients_exists
       && (!probe.oauth_clients_surface_exists || !probe.oauth_clients_surface_set_by_exists);
     // v0.26.5 (v34): sources.archived + archived_at + archive_expires_at added
@@ -1327,6 +1335,10 @@ export class PGLiteEngine implements BrainEngine {
     const needsMinionJobsPrivateQueue = probe.minion_jobs_exists
       && (!probe.minion_jobs_pq_owner_exists || !probe.minion_jobs_pq_token_exists
           || !probe.minion_jobs_pq_lease_exists);
+    // v149: the schema-blob queue protocol references both fields. Repair
+    // partial upgrades too; historical authority remains NULL until reviewed.
+    const needsMinionJobsAuthority = probe.minion_jobs_exists
+      && (!probe.minion_jobs_submission_authority_exists || !probe.minion_jobs_claim_generation_exists);
 
     // Fresh installs (no tables yet) and modern brains both no-op.
     if (!needsPagesBootstrap && !needsLinksBootstrap && !needsChunksBootstrap
@@ -1334,7 +1346,7 @@ export class PGLiteEngine implements BrainEngine {
         && !needsMcpLogBootstrap && !needsSubagentProviderId
         && !needsPagesRecency && !needsIngestLogSourceId
         && !needsFilesBootstrap && !needsOauthClientsBootstrap
-        && !needsOauthClientsSurface
+        && !needsOauthClientsSurface && !needsOauthClientGrants
         && !needsSourcesArchive && !needsPagesLastRetrievedAt
         && !needsPagesProvenance
         && !needsContextualRetrievalColumns && !needsPagesGeneration
@@ -1342,7 +1354,7 @@ export class PGLiteEngine implements BrainEngine {
         && !needsPagesLinksExtractedAt
         && !needsTimelineEventPageId
         && !needsMinionJobsTimeoutAt && !needsMinionJobsIdempotencyKey
-        && !needsMinionJobsPrivateQueue) return;
+        && !needsMinionJobsPrivateQueue && !needsMinionJobsAuthority) return;
 
     process.stderr.write('  Schema forward-reference gap detected, applying bootstrap\n');
 
@@ -1506,6 +1518,8 @@ export class PGLiteEngine implements BrainEngine {
       `);
     }
 
+    if (needsOauthClientGrants) await this.db.exec(GRANT_COLUMNS_SQL);
+
     if (needsOauthClientsSurface) {
       // WP4 (v127): per-client MCP tool surface + operator-lock marker.
       // Nullable TEXT, no index — bootstrap mirrors the v127 column shape so
@@ -1635,6 +1649,14 @@ export class PGLiteEngine implements BrainEngine {
         ALTER TABLE minion_jobs ADD COLUMN IF NOT EXISTS private_queue_lease_until TIMESTAMPTZ;
       `);
     }
+    if (needsMinionJobsAuthority) {
+      // Metadata only. Never assign authority to existing jobs here; the
+      // migration owns the cutover guard and explicit review authorizes rows.
+      await this.db.exec(`
+        ALTER TABLE minion_jobs ADD COLUMN IF NOT EXISTS submission_authority JSONB;
+        ALTER TABLE minion_jobs ADD COLUMN IF NOT EXISTS claim_generation BIGINT NOT NULL DEFAULT 0;
+      `);
+    }
   }
 
   async withReservedConnection<T>(fn: (conn: ReservedConnection) => Promise<T>): Promise<T> {
@@ -1695,7 +1717,7 @@ export class PGLiteEngine implements BrainEngine {
       `SELECT id, source_id, slug, type, title, compiled_truth, timeline, frontmatter, content_hash, created_at, updated_at, deleted_at,
               effective_date, effective_date_source,
               source_kind, source_uri, ingested_via, ingested_at,
-              contextual_retrieval_mode
+              contextual_retrieval_mode, source_path
        FROM pages WHERE ${where.join(' AND ')}
        ORDER BY (source_id = $${anchorParamIdx}) DESC, source_id ASC
        LIMIT 1`,
@@ -2012,13 +2034,21 @@ export class PGLiteEngine implements BrainEngine {
     sourceId: string,
   ): Promise<{ migrated: number }> {
     // Parity with PostgresEngine.migrateFactsToCanonical. UPDATE preserves
-    // every column except entity_slug + source_markdown_slug. Active rows
+    // every column except entity_slug + source_markdown_slug + row_num,
+    // which is offset past canonical's current MAX(row_num) (#4558; NULL
+    // stays NULL, expired rows count — see the Postgres twin). Active rows
     // only (expired_at IS NULL) so we don't disturb the supersession audit
     // trail.
     const { rows } = await this.db.query(
       `UPDATE facts
          SET entity_slug = $1,
-             source_markdown_slug = $1
+             source_markdown_slug = $1,
+             row_num = facts.row_num + COALESCE((
+               SELECT MAX(f2.row_num) FROM facts f2
+               WHERE f2.source_id = $2
+                 AND f2.source_markdown_slug = $1
+                 AND f2.row_num IS NOT NULL
+             ), 0)
        WHERE source_id = $2
          AND source_markdown_slug = $3
          AND expired_at IS NULL
@@ -3394,15 +3424,9 @@ export class PGLiteEngine implements BrainEngine {
   }
 
   async invalidateStaleSignatureEmbeddings(opts: { signature: string; sourceId?: string; includeNullSignature?: boolean }): Promise<number> {
-    // NULL out embeddings whose page signature is set AND differs from the
-    // current model signature. GRANDFATHER: NULL signature untouched —
-    // UNLESS includeNullSignature (#3391): provider migrations must not
-    // leave pre-stamp pages in the old embedding space. Feeds the existing
-    // NULL-embedding cursor so listStaleChunks stays unchanged. S2: keyed on
-    // the registry-ACTIVE column (loud resolver failure — destructive writes
-    // never guess).
     const colId = await this.activeEmbeddingColId();
-    const params: unknown[] = [opts.signature];
+    const { model, dims } = splitEmbeddingSignature(opts.signature);
+    const params: unknown[] = [opts.signature, model, dims];
     let srcClause = '';
     if (opts.sourceId !== undefined) {
       params.push(opts.sourceId);
@@ -3418,6 +3442,7 @@ export class PGLiteEngine implements BrainEngine {
          FROM pages p
         WHERE cc.page_id = p.id
           AND cc.${colId} IS NOT NULL
+          AND NOT ${currentSpaceChunkPredicate(colId, 2, 3)}
           AND ${sigClause}${srcClause}
         RETURNING cc.page_id`,
       params,
@@ -4965,12 +4990,13 @@ export class PGLiteEngine implements BrainEngine {
   async getRawData(
     slug: string,
     source?: string,
-    opts?: { sourceId?: string; sourceIds?: string[]; excludePrivate?: boolean },
+    opts?: PageReadScope & { includeDeleted?: boolean },
   ): Promise<RawData[]> {
     // v0.31.8 (D21): build WHERE clause dynamically. Without opts.sourceId,
     // no source filter (preserves pre-v0.31.8 cross-source read).
     const where: string[] = ['p.slug = $1'];
     if (opts?.excludePrivate) where.push(privatePagesFilterFragment('p'));
+    if (!opts?.includeDeleted) where.push('p.deleted_at IS NULL'); // raw_data follows the page soft-delete
     const params: unknown[] = [slug];
     if (source) {
       params.push(source);
@@ -5973,7 +5999,7 @@ export class PGLiteEngine implements BrainEngine {
 
   async getCalleesOf(
     qualifiedName: string,
-    opts?: { sourceId?: string; allSources?: boolean; limit?: number },
+    opts?: { sourceId?: string; allSources?: boolean; limit?: number; bareFallback?: boolean },
   ): Promise<import('./types.ts').CodeEdgeResult[]> {
     return codeEdgesImpl.getCalleesOf(this.codeEdgesDeps, qualifiedName, opts);
   }
