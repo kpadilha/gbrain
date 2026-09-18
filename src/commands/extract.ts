@@ -55,6 +55,7 @@ import {
 // #3190: pack-aware link typing on every extract surface (db/stale/fs).
 import { loadActivePackForLocalEngine } from '../core/schema-pack/best-effort.ts';
 import { resolveIncludeFrontmatter } from '../core/extract-frontmatter.ts';
+import { withCoordinatedWrite } from '../core/persistence/context.ts';
 import { inferLinkTypeFromPack } from '../core/schema-pack/link-inference.ts';
 export { extractTimelineFromContent, type ExtractedTimelineEntry } from '../core/timeline-extract.ts';
 import { extractTimelineFromContent, type ExtractedTimelineEntry } from '../core/timeline-extract.ts';
@@ -2310,15 +2311,25 @@ export async function extractStaleFromDB(
     // the batch's pages stay unstamped and re-extract next run. addLinksBatch is
     // ON CONFLICT DO NOTHING + timeline dedups, so partial-chunk writes are
     // idempotent on re-extraction.
-    for (let i = 0; i < linkRows.length; i += BATCH_SIZE) {
-      linksCreated += await engine.addLinksBatch(linkRows.slice(i, i + BATCH_SIZE), { auditSite: 'extract.stale' }); // gbrain-allow-direct-insert: gbrain extract --stale — canonical link reconciliation from markdown body
-    }
-    for (let i = 0; i < timelineRows.length; i += BATCH_SIZE) {
-      timelineCreated += await engine.addTimelineEntriesBatch(timelineRows.slice(i, i + BATCH_SIZE), { auditSite: 'extract.stale' });
-    }
-    // Stamp LAST, directly (not the swallowing stampExtracted) so a stamp
-    // failure surfaces instead of looping forever.
-    await engine.markPagesExtractedBatch(processedRefs, new Date().toISOString());
+    const writeSources = [...new Set([
+      ...processedRefs.map(row => row.source_id),
+      ...linkRows.flatMap(row => [row.from_source_id, row.to_source_id, row.origin_source_id]),
+      ...timelineRows.map(row => row.source_id),
+    ].filter((source): source is string => typeof source === 'string'))];
+    const written = await engine.transaction(tx => withCoordinatedWrite(tx, writeSources, async () => {
+      let links = 0, timeline = 0;
+      for (let i = 0; i < linkRows.length; i += BATCH_SIZE) {
+        links += await tx.addLinksBatch(linkRows.slice(i, i + BATCH_SIZE), { auditSite: 'extract.stale' }); // gbrain-allow-direct-insert: gbrain extract --stale — canonical link reconciliation from markdown body
+      }
+      for (let i = 0; i < timelineRows.length; i += BATCH_SIZE) {
+        timeline += await tx.addTimelineEntriesBatch(timelineRows.slice(i, i + BATCH_SIZE), { auditSite: 'extract.stale' });
+      }
+      // Stamp LAST so a failed projection remains stale and retryable.
+      await tx.markPagesExtractedBatch(processedRefs, new Date().toISOString());
+      return { links, timeline };
+    }));
+    linksCreated += written.links;
+    timelineCreated += written.timeline;
 
     pagesProcessed += rows.length;
     progress.tick(rows.length);
