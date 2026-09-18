@@ -3388,6 +3388,7 @@ export class PGLiteEngine implements BrainEngine {
     } else {
       conds.push(`${staleColRef} IS NULL`);
     }
+    conds.push(`p.deleted_at IS NULL`);
     conds.push(`NOT (COALESCE(p.frontmatter, '{}'::jsonb) ? 'embed_skip')`);
     if (opts?.sourceId !== undefined) {
       params.push(opts.sourceId);
