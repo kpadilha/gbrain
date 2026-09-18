@@ -13,7 +13,7 @@ import { disposePersistenceConsumer } from '../src/core/persistence/service.ts';
 import { readLocalWriter, registerLocalWriter, revokeLocalWriter, verifyLocalWriter, persistenceHome } from '../src/core/persistence/identity.ts';
 import { startPersistenceIpcServer, requestPersistenceAdministration, requestPersistenceCapabilities, persistenceSocketPathForConfig } from '../src/core/persistence/ipc.ts';
 import { acquireLock, releaseLock } from '../src/core/pglite-lock.ts';
-import { parsePersistenceAdminArgs } from '../src/commands/persistence-admin.ts';
+import { parsePersistenceAdminArgs, serializePersistenceAdminResult } from '../src/commands/persistence-admin.ts';
 import { withEnv } from './helpers/with-env.ts';
 
 let engine: PGLiteEngine;
@@ -164,5 +164,9 @@ describe('local writer administration', () => {
     expect(() => parsePersistenceAdminArgs('writer', ['claim', 'default', '--source', 'other'])).toThrow('Specify the source once');
     expect(() => parsePersistenceAdminArgs('writer', ['status', '--probe=false'])).toThrow('does not accept a value');
     expect(() => parsePersistenceAdminArgs('writer', ['transfer', 'steal', 'default'])).toThrow('prepare or accept');
+  });
+
+  test('CLI serialization preserves Postgres bigint counters as strings', () => {
+    expect(JSON.parse(serializePersistenceAdminResult({ outstanding: 42n }))).toEqual({ outstanding: '42' });
   });
 });

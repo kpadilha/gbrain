@@ -11,6 +11,7 @@ import { maybeDelegateLocalAdministration, persistenceConfigForBrain } from '../
 import { runPersistenceAdministration } from '../core/persistence/administration.ts';
 import type { PersistenceAdminOperation } from '../core/persistence/admin-contract.ts';
 import { reportPersistenceCliError } from './persistence-delegate.ts';
+import { bigintToStringReplacer } from '../core/utils.ts';
 
 export const WRITER_HELP = `Usage:
   gbrain sources writer status [<source>] [--probe] [--json]
@@ -38,6 +39,9 @@ the complete intended grant and revokes the prior registration. Credentials stay
 in private local files. CLI is the trusted administration lane; stdio stays remote.
 A revoked CLI cannot replace itself through a running owner. Stop that owner and
 explicitly register --replace locally to authorize a new principal.`;
+
+export const serializePersistenceAdminResult = (result: unknown): string =>
+  JSON.stringify(result, bigintToStringReplacer, 2) + '\n';
 
 type Group = 'writer' | 'local-writer';
 export function parsePersistenceAdminArgs(group: Group, args: string[]): {
@@ -125,7 +129,7 @@ export async function runPersistenceAdminCli(group: Group, args: string[], conne
       }
       result = await runPersistenceAdministration(connected ?? owned!, parsed.operation, parsed.params);
     }
-    await writeStdoutFinal(JSON.stringify(result, null, 2) + '\n');
+    await writeStdoutFinal(serializePersistenceAdminResult(result));
   } catch (error) {
     if (!await reportPersistenceCliError(error, args.includes('--json'))) {
       console.error(error instanceof Error ? error.message : String(error));
