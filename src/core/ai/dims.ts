@@ -158,6 +158,15 @@ const QWEN3_EMBEDDING_NATIVE_DIMS: Record<string, number> = {
   'qwen3-embedding-8b': 4096,
 };
 
+const JINA_V5_OMNI_MODELS = new Set([
+  'jina-embeddings-v5-omni-small',
+  'jina-embeddings-v5-omni-nano',
+]);
+
+function isJinaV5OmniModel(modelId: string): boolean {
+  return JINA_V5_OMNI_MODELS.has(modelMatchKey(modelId).split('/').pop() ?? '');
+}
+
 export function dimsProviderOptions(
   implementation: Implementation,
   modelId: string,
@@ -197,6 +206,15 @@ export function dimsProviderOptions(
       // Anthropic has no embedding model.
       return undefined;
     case 'openai-compatible':
+      // Jina v5 Omni is asymmetric at its native width. The generic
+      // openAICompatAsymmetricFetch recovers this field after the AI SDK strips
+      // unknown provider options; the local adapter maps it to encode_query /
+      // encode_document. Native dimensions are fixed, so no dimensions field.
+      if (isJinaV5OmniModel(modelId)) {
+        return {
+          openaiCompatible: { input_type: inputType ?? 'document' },
+        };
+      }
       // Voyage hosted flexible-dim models — accept `output_dimension`
       // (translated by voyageCompatFetch) AND `input_type: query|document`
       // for asymmetric retrieval. inputType is opt-in: when undefined,
