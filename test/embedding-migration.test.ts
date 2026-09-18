@@ -170,6 +170,23 @@ describe('#3391 includeNullSignature widening', () => {
     expect(await engine.invalidateStaleSignatureEmbeddings({ signature: 'new:model:1' })).toBe(0);
     expect(await engine.countStaleChunks({ signature: 'new:model:1' })).toBe(0);
   });
+
+  test('soft-deleted pages never enter the migration workload', async () => {
+    await seedEmbedded('deleted-legacy', 'abcde', null);
+    await engine.executeRaw(
+      `UPDATE pages SET deleted_at = CURRENT_TIMESTAMP
+        WHERE slug = 'deleted-legacy' AND source_id = 'default'`,
+    );
+
+    expect(await engine.countStaleChunks({
+      signature: 'new:model:1',
+      includeNullSignature: true,
+    })).toBe(0);
+    expect(await engine.sumStaleChunkChars({
+      signature: 'new:model:1',
+      includeNullSignature: true,
+    })).toBe(0);
+  });
 });
 
 describe('planEmbeddingMigration', () => {
