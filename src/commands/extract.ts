@@ -57,6 +57,7 @@ import {
 // #3190: pack-aware link typing on every extract surface (db/stale/fs).
 import { loadActivePackForLocalEngine } from '../core/schema-pack/best-effort.ts';
 import { resolveIncludeFrontmatter } from '../core/extract-frontmatter.ts';
+import { withCoordinatedWrite } from '../core/persistence/context.ts';
 import { inferLinkTypeFromPack } from '../core/schema-pack/link-inference.ts';
 import { PageRegexBudget } from '../core/schema-pack/redos-guard.ts';
 export { extractTimelineFromContent, type ExtractedTimelineEntry } from '../core/timeline-extract.ts';
@@ -2330,12 +2331,21 @@ export async function extractStaleFromDB(
       processedRefs.push({ slug: page.slug, source_id: page.source_id, extractedAt: stampIso });
     }
 
-    for (let i = 0; i < timelineRows.length; i += BATCH_SIZE) {
-      timelineCreated += await engine.addTimelineEntriesBatch(timelineRows.slice(i, i + BATCH_SIZE), { auditSite: 'extract.stale' });
-    }
-    // Stamp LAST, directly (not the swallowing stampExtracted) so a stamp
-    // failure surfaces instead of looping forever.
-    await engine.markPagesExtractedBatch(processedRefs, new Date().toISOString());
+    // Managed brains guard timeline_entries and pages behind the coordinator;
+    // links already go through replaceDerivedLinks above.
+    const writeSources = [...new Set([
+      ...processedRefs.map(row => row.source_id),
+      ...timelineRows.map(row => row.source_id),
+    ].filter((source): source is string => typeof source === 'string'))];
+    timelineCreated += await engine.transaction(tx => withCoordinatedWrite(tx, writeSources, async () => {
+      let timeline = 0;
+      for (let i = 0; i < timelineRows.length; i += BATCH_SIZE) {
+        timeline += await tx.addTimelineEntriesBatch(timelineRows.slice(i, i + BATCH_SIZE), { auditSite: 'extract.stale' });
+      }
+      // Stamp LAST so a failed projection remains stale and retryable.
+      await tx.markPagesExtractedBatch(processedRefs, new Date().toISOString());
+      return timeline;
+    }));
 
     pagesProcessed += rows.length;
     progress.tick(rows.length);
