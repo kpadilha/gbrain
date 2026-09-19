@@ -505,6 +505,7 @@ async function runIngest(engine: BrainEngine, args: string[], dispatch: Pick<Cli
       dryRun: parsed.dryRun,
       limit: parsed.limit,
       sinceIso,
+      completedOnly: parsed.since === 'last',
       sourceId,
       maxBytes: parsed.maxBytes,
       embed: parsed.embed,

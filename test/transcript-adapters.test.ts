@@ -10,6 +10,7 @@ import { describe, test, expect, afterEach } from 'bun:test';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { Database } from 'bun:sqlite';
 
 import {
   parseTranscript,
@@ -541,6 +542,21 @@ describe('hermesAdapter', () => {
     const fake = join(d, 'fake.db');
     writeFileSync(fake, 'not a database');
     expect(hermesAdapter.detect(fake, readSample(fake))).toBe(false);
+  });
+
+  test('pushes incremental cutoff and completed-session filtering into SQLite', async () => {
+    const d = tdir();
+    const dbPath = buildHermesFixture(d);
+    const db = new Database(dbPath);
+    db.run("UPDATE sessions SET ended_at=started_at+60 WHERE id='hermes-fixture-2'");
+    db.close();
+    const cutoff = '2026-08-05T23:59:59.000Z';
+    const { sessions, diag } = await drain(hermesAdapter.parse(dbPath, { sinceIso: cutoff, completedOnly: true }));
+    expect(sessions.map(s => s.meta.sessionId)).toEqual(['hermes-fixture-2']);
+    expect(diag.expectedEmpty).toBeUndefined();
+    const empty = await drain(hermesAdapter.parse(dbPath, { sinceIso: '2100-01-01T00:00:00Z', completedOnly: true }));
+    expect(empty.sessions).toEqual([]);
+    expect(empty.diag.expectedEmpty).toBe(true);
   });
 });
 
