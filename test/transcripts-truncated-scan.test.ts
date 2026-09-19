@@ -36,7 +36,7 @@ async function run(truncated: boolean) {
   scratch.push(dir);
   const f = join(dir, 'rollout.jsonl');
   writeFileSync(f, '{"x":1}\n');
-  return runTranscriptsIngest({} as never, {
+  return runTranscriptsIngest({ executeRaw: async () => [] } as never, {
     paths: [f],
     sourceId: 'default',
     adapters: [stubAdapter(truncated)],

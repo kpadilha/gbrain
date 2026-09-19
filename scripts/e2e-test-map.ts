@@ -254,7 +254,7 @@ export const E2E_TEST_MAP: Record<string, string[]> = {
     "test/e2e/doctor-connectors-pglite.test.ts",
   ],
   // C-19: timestamp-less sessions are reported skips, not watermark-freezing errors.
-  "src/core/transcripts/ingest.ts": ["test/e2e/transcripts-no-timestamp-pglite.test.ts"],
+  "src/core/transcripts/ingest.ts": ["test/e2e/transcripts-no-timestamp-pglite.test.ts", "test/e2e/transcripts-managed-persistence.test.ts"],
   // Agent-job scope fences over real Postgres.
   "src/core/ops/jobs.ts": ["test/e2e/jobs-agent-scope-postgres.test.ts", "test/e2e/delegated-grants-withdrawal.test.ts", "test/e2e/delegated-http-worker.test.ts"],
   // postgres.js bind paths + JSONB shapes + parity vs PGLite.
