@@ -431,7 +431,19 @@ export async function runTranscriptsIngest(
               const m = /^-p(\d+)$/.exec(suffix);
               const num = m ? Number(m[1]) : NaN;
               if (Number.isFinite(num) && num > rendered.parts.length) {
-                await engine.deletePage(row.slug, { sourceId: opts.sourceId });
+                if (coordinator) {
+                  await submitPageMutation(coordinator, {
+                    operation: 'delete_page',
+                    waitMs: 60_000,
+                    params: {
+                      source_id: opts.sourceId,
+                      slug: row.slug,
+                      force: true,
+                    },
+                  });
+                } else {
+                  await engine.deletePage(row.slug, { sourceId: opts.sourceId });
+                }
                 result.partsDeleted++;
               }
             }
@@ -481,7 +493,7 @@ async function submitTranscriptPart(
   const snapshot = await engine.readPageSnapshot(part.slug, { sourceId, includeDeleted: true });
   const receipt = await submitPageMutation(ctx, {
     operation: 'put_page',
-    params: { slug: part.slug, content: part.content, source_id: sourceId, ...provenance,
+    params: { slug: part.slug, content: part.content, source_id: sourceId, database_only: true, ...provenance,
       ...(snapshot?.revision ? { expected_revision: snapshot.revision } : {}) },
   });
   const slug = typeof receipt.slug === 'string' && receipt.slug ? receipt.slug : part.slug;

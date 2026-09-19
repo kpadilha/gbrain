@@ -260,6 +260,9 @@ export async function preparePageAdmission(ctx: OperationContext,
   ]) as [unknown, WriteRequest | null];
   const callerIntent = { ...p };
   delete callerIntent.request_id;
+  if (p.database_only === true && ctx.remote !== false) {
+    throw new OperationError('permission_denied', 'Only a trusted local caller may request database-only persistence.');
+  }
   if (prior) {
     await submissionAuthority(ctx, prior.operation, prior.source_id, prior.source_incarnation, prior.slug);
     await authorizeStoredRequest(ctx.engine, prior);
@@ -341,10 +344,12 @@ export async function preparePageAdmission(ctx: OperationContext,
   }
   let binding = boundAtStart;
   const sandbox = ctx.viaSubagent === true && !(ctx.allowedSlugPrefixes?.length);
+  const explicitDatabaseOnly = p.database_only === true;
   const configuredWriteThrough = !/^(false|0|off|no)$/i.test(writeThroughSetting ?? 'true');
-  const writeThrough = configuredWriteThrough && !sandbox;
+  const writeThrough = configuredWriteThrough && !sandbox && !explicitDatabaseOnly;
   const root = source.local_path || repoPath;
   if (sandbox) authority.databaseOnlyReason = 'subagent_sandbox';
+  else if (explicitDatabaseOnly) authority.databaseOnlyReason = 'explicit_local_db_only';
   else if (!configuredWriteThrough) authority.databaseOnlyReason = 'disabled_by_config';
   else if (!root && !binding) authority.databaseOnlyReason = 'no_repo_configured';
   if (p.local_dir !== undefined) {
