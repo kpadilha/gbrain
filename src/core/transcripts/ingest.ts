@@ -58,6 +58,8 @@ export interface TranscriptsIngestOpts {
   limit?: number;
   /** Only sessions whose LAST message is strictly newer than this ISO. */
   sinceIso?: string;
+  /** Import only sessions the source marks complete (used by --since last). */
+  completedOnly?: boolean;
   /** Resolved source id — threads through import, raw-data, reconciliation. */
   sourceId: string;
   /** Embedding opt-in (default OFF: bulk imports defer to the embed backfill). */
@@ -237,8 +239,9 @@ export async function runTranscriptsIngest(
 
     // gbrain#4149: thread the explicit cap override; omit the opts object
     // entirely when unset so adapters keep their native defaults.
-    const gen = opts.maxBytes != null
-      ? detected.adapter.parse(path, { maxBytes: opts.maxBytes })
+    const parseOpts = { maxBytes: opts.maxBytes, sinceIso: opts.sinceIso, completedOnly: opts.completedOnly };
+    const gen = Object.values(parseOpts).some(value => value != null)
+      ? detected.adapter.parse(path, parseOpts)
       : detected.adapter.parse(path);
     try {
       let step = await gen.next();
