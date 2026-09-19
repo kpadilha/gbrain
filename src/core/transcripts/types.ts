@@ -90,6 +90,10 @@ export interface ParseSessionsOpts {
    * read, so an over-budget rollout still imports.
    */
   maxBytes?: number;
+  /** Adapter-side lower bound for stores that can filter before materializing sessions. */
+  sinceIso?: string;
+  /** Incremental archives wait for a session to end instead of rewriting a live transcript. */
+  completedOnly?: boolean;
 }
 
 export interface TranscriptAdapter {
