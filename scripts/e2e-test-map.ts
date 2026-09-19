@@ -41,6 +41,7 @@ export const E2E_TEST_MAP: Record<string, string[]> = {
   // Codex session-end capture lane: the hooks writer + hook-lane parser +
   // dispatch seam all feed the real-codex door (heavy lane).
   "src/core/bootstrap/codex-hooks.ts": ["test/e2e/bootstrap-real-codex.serial.test.ts"],
+  "src/core/transcripts/ingest.ts": ["test/e2e/transcripts-managed-persistence.test.ts"],
   "src/core/transcripts/codex-hook-lane.ts": ["test/e2e/bootstrap-real-codex.serial.test.ts"],
   "src/core/transcripts/capture-spec.ts": [
     "test/e2e/bootstrap-hook-under-serve.serial.test.ts",
