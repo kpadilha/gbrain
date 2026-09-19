@@ -93,6 +93,7 @@ interface SessionRow {
   cwd: string | null;
   model: string | null;
   source: string | null;
+  ended_at: number | null;
 }
 
 interface MessageRow {
@@ -144,12 +145,19 @@ export const hermesAdapter: TranscriptAdapter = {
       try {
         let sessionRows: SessionRow[];
         try {
-          sessionRows = db
-            .query<SessionRow, []>(
-              'SELECT id, title, display_name, started_at, cwd, model, source ' +
-                'FROM sessions ORDER BY started_at',
-            )
-            .all();
+          const cutoff = opts.sinceIso ? Date.parse(opts.sinceIso) / 1000 : undefined;
+          if (cutoff !== undefined && !Number.isFinite(cutoff)) throw new Error(`invalid since timestamp: ${opts.sinceIso}`);
+          const where = [
+            ...(opts.completedOnly ? ['s.ended_at IS NOT NULL'] : []),
+            ...(cutoff !== undefined ? [
+              "EXISTS (SELECT 1 FROM messages m WHERE m.session_id=s.id AND m.role IN ('user','assistant') AND m.timestamp>?)",
+            ] : []),
+          ];
+          const sql = 'SELECT s.id, s.title, s.display_name, s.started_at, s.cwd, s.model, s.source, s.ended_at ' +
+            'FROM sessions s' + (where.length ? ` WHERE ${where.join(' AND ')}` : '') + ' ORDER BY s.started_at';
+          sessionRows = cutoff === undefined
+            ? db.query<SessionRow, []>(sql).all()
+            : db.query<SessionRow, [number]>(sql).all(cutoff);
         } catch (err) {
           // Missing/renamed tables = host schema drift, not a crash.
           return {
@@ -209,6 +217,7 @@ export const hermesAdapter: TranscriptAdapter = {
       sessions,
       zeroSessionsReason:
         sessions === 0 ? 'no sessions with user/assistant text messages in store' : undefined,
+      expectedEmpty: sessions === 0 && Boolean(opts.sinceIso || opts.completedOnly) ? true : undefined,
     };
   },
 };
