@@ -491,6 +491,7 @@ async function runIngest(engine: BrainEngine, args: string[]): Promise<void> {
       dryRun: parsed.dryRun,
       limit: parsed.limit,
       sinceIso,
+      completedOnly: parsed.since === 'last',
       sourceId,
       maxBytes: parsed.maxBytes,
       embed: parsed.embed,
