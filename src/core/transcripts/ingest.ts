@@ -27,8 +27,13 @@
  * must never skip work permanently.
  */
 
+import { createHash } from 'node:crypto';
 import type { BrainEngine } from '../engine.ts';
+import { loadConfig } from '../config.ts';
 import { importFromContent } from '../import-file.ts';
+import type { OperationContext } from '../ops/contract.ts';
+import { managedPersistenceEnabled } from '../persistence/ownership.ts';
+import { submitPageMutation } from '../persistence/page-mutations.ts';
 import { canonicalJson } from '../remediation-step.ts';
 import type { TranscriptAdapter, TranscriptFormat } from './types.ts';
 import { detectAdapter } from './detect.ts';
@@ -145,6 +150,23 @@ function lastMessageTs(messages: Array<{ timestamp: string }>): string {
 
 const RUN_ABORT_MARKER = 'transcripts-ingest run abort';
 
+/** Stable replay ID: a retried scan reuses the same journal receipt. */
+export function transcriptWriteRequestId(kind: string, sourceId: string, slug: string, content = ''): string {
+  const hex = createHash('sha256').update(`v2\0${kind}\0${sourceId}\0${slug}\0${content}`).digest('hex').slice(0, 32);
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-5${hex.slice(13, 16)}-${((parseInt(hex[16], 16) & 3) | 8).toString(16)}${hex.slice(17, 20)}-${hex.slice(20)}`;
+}
+
+function transcriptWriteContext(engine: BrainEngine, sourceId: string): OperationContext {
+  return {
+    engine,
+    sourceId,
+    config: loadConfig() ?? { engine: engine.kind },
+    logger: { info() {}, warn() {}, error() {} },
+    dryRun: false,
+    remote: false,
+  };
+}
+
 function isPerSessionImportError(err: unknown): boolean {
   // 'invalid byte sequence' is Postgres rejecting the DATA (e.g. a U+0000 a
   // sanitizer missed, #4392) — one bad session, never a DB-down signal.
@@ -173,6 +195,8 @@ export async function runTranscriptsIngest(
     maxSessionTs: '',
   };
   let limitTruncated = false;
+  const managed = !opts.dryRun && await managedPersistenceEnabled(engine);
+  const writeCtx = managed ? transcriptWriteContext(engine, opts.sourceId) : null;
 
   // Redaction patterns compile ONCE per run — loadPatterns re-reads and
   // recompiles the pattern file on every call, which a bulk import would
@@ -286,19 +310,36 @@ export async function runTranscriptsIngest(
             let resolvedBaseSlug = rendered.baseSlug;
             for (const part of rendered.parts) {
               try {
-                const r = await importFromContent(engine, part.slug, part.content, {
-                  noEmbed: !opts.embed,
-                  sourceId: opts.sourceId,
-                  activePack: opts.activePack,
-                  source_kind: `transcript:${session.meta.harness}`,
-                  source_uri: path,
-                  ingested_via: 'cli:transcripts-ingest',
-                });
-                outcome.statuses.push(r.status);
-                if (r.status === 'imported') result.pages.imported++;
-                else if (r.status === 'skipped') result.pages.skipped++;
+                const r = writeCtx
+                  ? await submitPageMutation(writeCtx, {
+                      operation: 'put_page',
+                      waitMs: 60_000,
+                      params: {
+                        request_id: transcriptWriteRequestId('put_page', opts.sourceId, part.slug, part.content),
+                        source_id: opts.sourceId,
+                        slug: part.slug,
+                        content: part.content,
+                        force: true,
+                        database_only: true,
+                        source_kind: `transcript:${session.meta.harness}`,
+                        source_uri: path,
+                        ingested_via: 'cli:transcripts-ingest',
+                      },
+                    })
+                  : await importFromContent(engine, part.slug, part.content, {
+                      noEmbed: !opts.embed,
+                      sourceId: opts.sourceId,
+                      activePack: opts.activePack,
+                      source_kind: `transcript:${session.meta.harness}`,
+                      source_uri: path,
+                      ingested_via: 'cli:transcripts-ingest',
+                    });
+                const status = 'state' in r ? (r.noop === true ? 'skipped' : 'imported') : r.status;
+                outcome.statuses.push(status as 'imported' | 'skipped' | 'error');
+                if (status === 'imported') result.pages.imported++;
+                else if (status === 'skipped') result.pages.skipped++;
                 else result.pages.errored++;
-                const actualSlug = r.slug || part.slug;
+                const actualSlug = typeof r.slug === 'string' && r.slug ? r.slug : part.slug;
                 if (part.part === 1 && actualSlug) resolvedBaseSlug = actualSlug;
                 result.slugsTouched.push(actualSlug);
               } catch (err) {
@@ -395,7 +436,20 @@ export async function runTranscriptsIngest(
               const m = /^-p(\d+)$/.exec(suffix);
               const num = m ? Number(m[1]) : NaN;
               if (Number.isFinite(num) && num > rendered.parts.length) {
-                await engine.deletePage(row.slug, { sourceId: opts.sourceId });
+                if (writeCtx) {
+                  await submitPageMutation(writeCtx, {
+                    operation: 'delete_page',
+                    waitMs: 60_000,
+                    params: {
+                      request_id: transcriptWriteRequestId('delete_page', opts.sourceId, row.slug),
+                      source_id: opts.sourceId,
+                      slug: row.slug,
+                      force: true,
+                    },
+                  });
+                } else {
+                  await engine.deletePage(row.slug, { sourceId: opts.sourceId });
+                }
                 result.partsDeleted++;
               }
             }

@@ -57,6 +57,9 @@ export async function submitPageMutation(ctx: OperationContext,
   const prior = await getWriteRequest(ctx.engine, principal, requestId);
   const callerIntent = { ...p };
   delete callerIntent.request_id;
+  if (p.database_only === true && ctx.remote !== false) {
+    throw new OperationError('permission_denied', 'Only a trusted local caller may request database-only persistence.');
+  }
   if (prior) {
     await submissionAuthority(ctx, prior.operation, prior.source_id, prior.source_incarnation, prior.slug);
     await authorizeStoredRequest(ctx.engine, prior);
@@ -104,10 +107,12 @@ export async function submitPageMutation(ctx: OperationContext,
   const snapshot = await ctx.engine.readPageSnapshot(slug, { sourceId, includeDeleted: true });
   let binding = await getWorktreeBinding(ctx.engine, sourceId);
   const sandbox = ctx.viaSubagent === true && !(ctx.allowedSlugPrefixes?.length);
+  const explicitDatabaseOnly = p.database_only === true;
   const configuredWriteThrough = !/^(false|0|off|no)$/i.test(await ctx.engine.getConfig('sync.write_through') ?? 'true');
-  const writeThrough = configuredWriteThrough && !sandbox;
+  const writeThrough = configuredWriteThrough && !sandbox && !explicitDatabaseOnly;
   const root = source.local_path || (sourceId === 'default' ? await ctx.engine.getConfig('sync.repo_path') : null);
   if (sandbox) authority.databaseOnlyReason = 'subagent_sandbox';
+  else if (explicitDatabaseOnly) authority.databaseOnlyReason = 'explicit_local_db_only';
   else if (!configuredWriteThrough) authority.databaseOnlyReason = 'disabled_by_config';
   else if (!root && !binding) authority.databaseOnlyReason = 'no_repo_configured';
   if (p.local_dir !== undefined) {
