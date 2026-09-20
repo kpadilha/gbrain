@@ -48,7 +48,8 @@ import { stdioVisibleTools } from '../src/mcp/server.ts';
 import { GBRAIN_MCP_INSTRUCTIONS } from '../src/mcp/instructions.ts';
 import { cl100kAvailable, estimateTokens } from '../src/core/chunkers/token-estimate.ts';
 
-const SERVED_STARTER_MAX_CHARS = 25_000;
+// Local: remember's coding-memory provenance params (25,147 measured on v0.60.147.0).
+const SERVED_STARTER_MAX_CHARS = 25_150;
 const SERVED_STARTER_MAX_TOKENS = 5_700;
 /** The whole tools/list JSON, annotations included (25,735 measured at v0.60.46.0; traverse_graph's `hops` is full-surface-only, 25,941 measured; 26,402 once mute_notice, the dismissal for the coaching notices starter sessions receive, joined starter; 26,671 with #6007's put_page wait_ms param and write guidance, which carry the put_pages hint and the receipt poll rule starter agents need; 26,679 with delta's opaque `cursor` param, paid for by trimming delta's own descriptions, model-visible 24,985; 26,692 with recall's `question` param, paid for by trimming recall's own parameter text, model-visible 24,998; 24,996 after the #6446 merge, recall's grep text trimmed again). */
 const SERVED_STARTER_MAX_JSON_CHARS = 26_700;
