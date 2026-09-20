@@ -55,6 +55,14 @@ const FACT_KINDS = ['event', 'preference', 'commitment', 'belief', 'fact'] as co
  */
 const FACT_KINDS_RESPONSE = [...FACT_KINDS, 'idea'] as const;
 const PROVENANCE_MAX = 500;
+// Phase 1 coding-memory seam: optional provenance metadata on `remember`.
+// session_id/event_type are opaque identifiers (128 chars); context is a
+// pointer (file/commit/line), not a transcript (2048 UTF-8 bytes).
+const METADATA_ID_MAX = 128;
+const CONTEXT_MAX_BYTES = 2048;
+// ISO 8601 date or timezone-qualified datetime. Zone-less datetimes are
+// host-dependent in JS, so rejecting them keeps replay stable across machines.
+const ISO_8601_RX = /^\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2}))?$/;
 
 // ─── remember ────────────────────────────────────────────────────────────────
 
@@ -97,6 +105,26 @@ const remember: Operation = {
       enum: ['world', 'private'],
       description:
         'world (default): readable by every agent connected to this brain — required for the remote remember→recall round-trip. private: local CLI reads only.',
+    },
+    session_id: {
+      type: 'string',
+      description:
+        'Optional source session id (max 128 chars) persisted on the fact as source_session — the capture session that produced this memory (e.g. topic-id from MCP _meta.session_id, or a CLI session label). recall(session_id) filters on it.',
+    },
+    event_type: {
+      type: 'string',
+      description:
+        'Optional event-shaped marker (max 128 chars), e.g. "file_edit", "commit", "test_run". Persisted on the fact; recall(kind:"event") selects rows that carry one.',
+    },
+    observed_at: {
+      type: 'string',
+      description:
+        'Optional ISO 8601 date or datetime of when the event actually happened — becomes the fact\'s valid_from (event time, used by since-windowed recall). Defaults to now.',
+    },
+    context: {
+      type: 'string',
+      description:
+        'Optional pointer context string (e.g. "commit abc123" or compact JSON). Max 2048 UTF-8 bytes.',
     },
   },
   mutating: true,
@@ -144,6 +172,65 @@ const remember: Operation = {
         'Use "world" (default — agents can recall it) or "private" (local CLI reads only).',
       );
     }
+    // Phase 1 coding-memory seam: normalize optional provenance metadata here,
+    // once, so the admitted callerIntent (and its replay digest) is stable.
+    let sessionId: string | undefined;
+    if (p.session_id !== undefined && p.session_id !== null) {
+      const v = typeof p.session_id === 'string' ? p.session_id.trim() : '';
+      if (!v || v.length > METADATA_ID_MAX) {
+        throw verbError(
+          'invalid_params',
+          `session_id must be a non-empty string of at most ${METADATA_ID_MAX} chars.`,
+          `Pass the capture session id (max ${METADATA_ID_MAX} chars), e.g. session_id: "topic-abc123".`,
+        );
+      }
+      sessionId = v;
+    }
+    let eventType: string | undefined;
+    if (p.event_type !== undefined && p.event_type !== null) {
+      const v = typeof p.event_type === 'string' ? p.event_type.trim() : '';
+      if (!v || v.length > METADATA_ID_MAX) {
+        throw verbError(
+          'invalid_params',
+          `event_type must be a non-empty string of at most ${METADATA_ID_MAX} chars.`,
+          `Pass an event marker (max ${METADATA_ID_MAX} chars), e.g. event_type: "file_edit".`,
+        );
+      }
+      eventType = v;
+    }
+    let observedAt: string | undefined;
+    if (p.observed_at !== undefined && p.observed_at !== null) {
+      const raw = typeof p.observed_at === 'string' ? p.observed_at.trim() : '';
+      const parsed = raw ? new Date(raw) : null;
+      if (!raw || !ISO_8601_RX.test(raw) || !parsed || Number.isNaN(parsed.getTime())) {
+        throw verbError(
+          'invalid_params',
+          `observed_at must be a valid ISO 8601 date or datetime (got "${String(p.observed_at)}").`,
+          'Pass an ISO 8601 date or timezone-qualified timestamp, e.g. observed_at: "2026-03-04T05:06:07.000Z" or "2026-03-04".',
+        );
+      }
+      observedAt = parsed.toISOString();
+    }
+    let context: string | undefined;
+    if (p.context !== undefined && p.context !== null) {
+      if (typeof p.context !== 'string') {
+        throw verbError(
+          'invalid_params',
+          'context must be a string.',
+          'Pass a pointer string, e.g. context: "commit abc123" or compact JSON text.',
+        );
+      }
+      context = p.context;
+      const bytes = Buffer.byteLength(context, 'utf8');
+      if (bytes > CONTEXT_MAX_BYTES) {
+        throw verbError(
+          'invalid_params',
+          `context exceeds ${CONTEXT_MAX_BYTES} UTF-8 bytes (got ${bytes}).`,
+          `Shorten context to ${CONTEXT_MAX_BYTES} bytes or fewer — it is a pointer, not a transcript.`,
+        );
+      }
+    }
+
     if (ctx.dryRun) {
       parseTtlParam(p.ttl); // Dry runs still validate without admitting intent.
       return {
@@ -156,7 +243,11 @@ const remember: Operation = {
 
     const { submitRememberMutation } = await import('./persistence/memory-mutations.ts');
     const { runMemoryWrite } = await import('./persistence/verb-errors.ts');
-    return runMemoryWrite(() => submitRememberMutation(ctx, { ...p, fact, provenance, kind, visibility }));
+    return runMemoryWrite(() => submitRememberMutation(ctx, { ...p, fact, provenance, kind, visibility,
+      ...(sessionId !== undefined ? { session_id: sessionId } : {}),
+      ...(eventType !== undefined ? { event_type: eventType } : {}),
+      ...(observedAt !== undefined ? { observed_at: observedAt } : {}),
+      ...(context !== undefined ? { context } : {}) }));
   },
   cliHints: { name: 'remember', positional: ['fact'] },
 };
