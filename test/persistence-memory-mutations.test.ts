@@ -286,3 +286,25 @@ describe('journaled memory publication, both engines', () => {
     }
   });
 });
+
+describe('coding-memory metadata seam (Phase 1)', () => {
+  test('remember persists session_id, event_type, observed_at and context on the subjectless single insert', async () => {
+    for (const engine of engines) {
+      const observedAt = '2026-03-04T05:06:07.000Z';
+      const fact = `subjectless coding memory ${randomUUID()}`;
+      const result = await operationsByName.remember!.handler(context(engine), {
+        fact, provenance: 'test coding-memory seam', session_id: 'sess-coding-1', event_type: 'file_edit',
+        observed_at: observedAt, context: JSON.stringify({ file: 'src/core/verbs.ts', line: 42 }),
+      }) as Record<string, unknown>;
+      expect(result).toMatchObject({ status: 'inserted', entity_slug: null });
+      const rows = await engine.executeRaw<{ source_session: string | null; event_type: string | null; valid_from: Date | string; context: string | null; row_num: number | null }>(
+        'SELECT source_session,event_type,valid_from,context,row_num FROM facts WHERE id=$1', [Number(result.id)]);
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toMatchObject({
+        source_session: 'sess-coding-1', event_type: 'file_edit', row_num: null,
+        context: JSON.stringify({ file: 'src/core/verbs.ts', line: 42 }),
+      });
+      expect(new Date(rows[0].valid_from).toISOString()).toBe(observedAt);
+    }
+  }, 60_000);
+});

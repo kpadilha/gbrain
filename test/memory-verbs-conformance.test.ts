@@ -276,6 +276,70 @@ describe('remember — contract behavior', () => {
   });
 });
 
+describe('remember — coding-memory metadata seam (session_id/event_type/observed_at/context)', () => {
+  it('rejects an unparseable observed_at with invalid_params + an ISO 8601 fix', async () => {
+    const { isError, body } = await callRemote('remember', {
+      fact: 'observed_at trap', provenance: 'test', observed_at: 'not-a-timestamp',
+    });
+    expect(isError).toBe(true);
+    expect(body.error).toBe('invalid_params');
+    expect(body.suggestion).toContain('ISO 8601');
+
+    const zoneLess = await callRemote('remember', {
+      fact: 'zone-less observed_at trap', provenance: 'test', observed_at: '2026-03-04T05:06:07',
+    });
+    expect(zoneLess.isError).toBe(true);
+    expect(zoneLess.body.error).toBe('invalid_params');
+  });
+
+  it('rejects an oversized context (>2048 UTF-8 bytes)', async () => {
+    const { isError, body } = await callRemote('remember', {
+      fact: 'oversized context trap', provenance: 'test', context: 'x'.repeat(2049),
+    });
+    expect(isError).toBe(true);
+    expect(body.error).toBe('invalid_params');
+    expect(body.suggestion).toContain('2048');
+
+    const multibyte = await callRemote('remember', {
+      fact: 'multibyte context trap', provenance: 'test', context: 'é'.repeat(1025),
+    });
+    expect(multibyte.isError).toBe(true);
+    expect(multibyte.body.error).toBe('invalid_params');
+  });
+
+  it('caps session_id and event_type at 128 chars (empty rejected, boundary accepted)', async () => {
+    const longSession = await callRemote('remember', { fact: 'session limit', provenance: 'test', session_id: 's'.repeat(129) });
+    expect(longSession.isError).toBe(true);
+    expect(longSession.body.error).toBe('invalid_params');
+    expect(longSession.body.suggestion).toContain('128');
+
+    const emptyEvent = await callRemote('remember', { fact: 'event limit', provenance: 'test', event_type: '   ' });
+    expect(emptyEvent.isError).toBe(true);
+    expect(emptyEvent.body.error).toBe('invalid_params');
+
+    const longEvent = await callRemote('remember', { fact: 'event limit 2', provenance: 'test', event_type: 'e'.repeat(129) });
+    expect(longEvent.isError).toBe(true);
+    expect(longEvent.body.error).toBe('invalid_params');
+    expect(longEvent.body.suggestion).toContain('128');
+
+    const boundary = await callRemote('remember', {
+      fact: 'metadata boundary accepted', provenance: 'test',
+      session_id: 's'.repeat(128), event_type: 'e'.repeat(128),
+    });
+    expect(boundary.isError).toBe(false);
+    expect(boundary.body.status).toBe('inserted');
+  });
+
+  it('accepts string context and rejects other shapes', async () => {
+    const text = await callRemote('remember', { fact: 'string context', provenance: 'test', context: 'src/core/verbs.ts:120' });
+    expect(text.isError).toBe(false);
+
+    const bad = await callRemote('remember', { fact: 'bad context', provenance: 'test', context: 42 });
+    expect(bad.isError).toBe(true);
+    expect(bad.body.error).toBe('invalid_params');
+  });
+});
+
 describe('entity — card, arms, zero LLM', () => {
   it('prefers an entity page when a newer conversation has the same exact title', async () => {
     await seedEntityPage('people/jordan-example', 'Jordan Example');
