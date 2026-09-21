@@ -9,7 +9,10 @@ import { getWriteRequest, admitWrite } from './journal.ts';
 import { assertPersistenceAccepting, foregroundWriteCompletions, startPersistenceConsumer, waitForWrite } from './service.ts';
 import { discoverManagedSync, resolveManagedSyncContext, readSyncContent, syncRawHash, type SyncDiscovery } from './sync-discovery.ts';
 import { managedSyncAuthority, validateSyncAuthority, validateManagedSyncOptions, type SyncAuthority } from './sync-authority.ts';
-import type { SyncIntent } from './sync-prepare.ts';
+import { syncFileOverlay, type SyncIntent } from './sync-prepare.ts';
+import { importFromContent } from '../import-file.ts';
+import type { PreparedContentImport } from './prepared-import.ts';
+import { basename } from 'node:path';
 
 interface Pending { requestId: string; slug: string; pageId: number | null; intent: SyncIntent; }
 interface Cursor extends SyncDiscovery { runId: string; index: number; authority: SyncAuthority; pending?: Pending; done?: boolean;
@@ -71,6 +74,28 @@ async function freezeEntry(engine: BrainEngine, cursor: Cursor, key: string): Pr
     slugMode: cursor.slugMode, index: cursor.index, total: cursor.entries.length, from: cursor.from, target: cursor.target } };
 }
 
+/**
+ * Every admission spends a permanent request ID, so a file whose publication would be a
+ * pure no-op (same prepared page, same origin, no file overlay) is never admitted.
+ */
+async function withoutUnchangedImports(engine: BrainEngine, discovery: SyncDiscovery): Promise<SyncDiscovery['entries']> {
+  const kept: SyncDiscovery['entries'] = [];
+  for (const entry of discovery.entries) {
+    if (entry.action !== 'import' || entry.pageId == null) { kept.push(entry); continue; }
+    const snapshot = await engine.readPageSnapshot(entry.slug!, { sourceId: discovery.sourceId, includeDeleted: true });
+    if (!snapshot || snapshot.page.deleted_at != null || snapshot.revision !== entry.revision || snapshot.page.source_path !== entry.sourcePath) {
+      kept.push(entry); continue;
+    }
+    const content = readSyncContent(discovery, entry);
+    let prepared: PreparedContentImport | undefined;
+    await importFromContent(engine, entry.slug!, content, { sourceId: discovery.sourceId, noEmbed: true, remote: false,
+      filename: basename(entry.sourcePath).replace(/\.mdx?$/i, ''), sourcePath: entry.sourcePath, allowEmptyOverwrite: true,
+      prepare: async value => { prepared = value; return value.result; } });
+    if (!prepared?.noop || prepared.slug !== entry.slug || syncFileOverlay(content, entry.slug!, prepared.parsedPage, snapshot.tags)) kept.push(entry);
+  }
+  return kept;
+}
+
 /** One immutable page is admitted at a time; foreground writes can never sit behind a whole scan. */
 export async function performManagedSync(engine: BrainEngine, opts: SyncOpts, slice?: { maxPages: number; maxMs: number }): Promise<SyncResult> {
   assertPersistenceAccepting(engine);
@@ -96,6 +121,7 @@ export async function performManagedSync(engine: BrainEngine, opts: SyncOpts, sl
   }
   if (!cursor) {
     const discovery = await discoverManagedSync(engine, opts, context);
+    if (!opts.dryRun && !authority.writer.remote) discovery.entries = await withoutUnchangedImports(engine, discovery);
     const fresh: Cursor = { ...discovery, authority, runId: randomUUID(), index: 0, counts: { added: 0, modified: 0, deleted: 0, chunks: 0 } };
     if (opts.dryRun) return result(fresh, 'dry_run');
     if (!fresh.entries.length && fresh.from === fresh.target) return result(fresh, 'up_to_date');

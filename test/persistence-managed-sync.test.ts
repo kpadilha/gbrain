@@ -110,6 +110,23 @@ test('attached working-tree changes require opt-in and delete retains exact phys
   }
 }),120_000);
 
+test('an unchanged working tree is not re-admitted, so rescans spend no permanent request IDs', async () => withEnv({ GBRAIN_HOME: home }, async () => {
+  for (const engine of engines) {
+    const f=await fixture(engine,{'notes/a.md':'Committed observation for the source.\n'});
+    await performManagedSync(engine,{sourceId:f.id,noPull:true});
+    writeFileSync(join(f.root,'notes/a.md'),'Uncommitted revised observation for the source.\n');
+    writeFileSync(join(f.root,'notes/new.md'),'An untracked observation written through to the checkout.\n');
+    expect((await performManagedSync(engine,{sourceId:f.id,noPull:true,workingTree:true})).status).toBe('synced');
+    const ids=async()=>(await engine.executeRaw('SELECT id FROM persistence_requests WHERE source_id=$1',[f.id])).length;
+    const settled=await ids();
+    for (let i=0;i<3;i++) expect((await performManagedSync(engine,{sourceId:f.id,noPull:true,workingTree:true})).status).toBe('up_to_date');
+    expect(await ids()).toBe(settled);
+    writeFileSync(join(f.root,'notes/new.md'),'The untracked observation changed again.\n');
+    expect((await performManagedSync(engine,{sourceId:f.id,noPull:true,workingTree:true})).modified).toBe(1);
+    expect((await engine.getPage('notes/new',{sourceId:f.id}))?.compiled_truth).toContain('changed again');
+  }
+}),120_000);
+
 test('repeated slices reuse one manifest and still reject an intervening page identity change', async () => withEnv({ GBRAIN_HOME: home }, async () => {
   for (const engine of engines) {
     const f = await fixture(engine, {
