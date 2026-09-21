@@ -8,11 +8,11 @@ import { opError, OperationError, type OperationContext } from '../ops/contract.
 import { currentSubmissionAuthority } from '../minions/submission-authority.ts';
 import { currentVerifiedLocalWriter, localHostId } from './identity.ts';
 import { getWorktreeBinding } from './ownership.ts';
-import { SCREENING_SHARED_READS, batchSharedReads, emitFenceNotice, initializeLocalPersistence, pendingAwareResponse, preparePageAdmission, requestPrincipalForContext, withBatchAdmission } from './page-mutations.ts';
+import { SCREENING_SHARED_READS, batchSharedReads, emitFenceNotice, importWriteRequestId, initializeLocalPersistence, pendingAwareResponse, preparePageAdmission, requestPrincipalForContext, submitPageMutation, withBatchAdmission } from './page-mutations.ts';
 import { admitBatch } from './page-batch.ts';
 import { writeOutcomeUnknown } from './admission-retry.ts';
 import { assertPersistenceAccepting, waitForWrites } from './service.ts';
-import type { WriteAdmission } from './journal.ts';
+import { getWriteRequest, type WriteAdmission } from './journal.ts';
 import type { WriteRequest } from './model.ts';
 import { digest, sha256 } from './digest.ts';
 import { assertImportPaths, managedImportContent, managedStreamedIdentity, prepareManagedImportMutation, readImportBytes, type ImportPack, type ManagedImportBodyRef,
@@ -91,19 +91,9 @@ export async function importManagedFile(engine: BrainEngine, filePath: string, s
  */
 export async function importManagedFiles(engine: BrainEngine, files: readonly ManagedImportFile[],
   opts: { sourceId?: string; noEmbed?: boolean; activePack?: ImportPack; signal?: AbortSignal; slugRoot?: string } = {}): Promise<PromiseSettledResult<ImportResult>[]> {
-  const caller = currentSubmissionAuthority();
-  if (caller && caller.kind !== 'application' || currentVerifiedLocalWriter()?.remote) {
-    throw trustedCliRequired('Managed filesystem import requires the trusted local CLI.');
-  }
-  opts.signal?.throwIfAborted();
+  const { sourceId, binding, unowned } = await managedImportOwner(engine, opts);
   const settled: PromiseSettledResult<ImportResult>[] = new Array(files.length);
   const fail = (i: number, reason: unknown) => { settled[i] = { status: 'rejected', reason }; };
-  const sourceId = opts.sourceId ?? 'default';
-  const binding = await getWorktreeBinding(engine, sourceId);
-  const unowned = !binding?.local_path || binding.owner_host_id !== localHostId() || binding.state !== 'active'
-    ? opError('owner_unavailable', 'Managed import must run on the active canonical owner for the selected source.',
-      `This host is not the active owner of source ${sourceId}, so nothing was imported. Run the import on the owner host that writer status names, or wait until its owner is active.`,
-      { fix: readFix(`Shows source ${sourceId}'s owner host and state, read-only.`, { argv: ['gbrain', 'sources', 'writer', 'status', '--source', sourceId, '--json'] }) }) : null;
   const ctx = { engine, remote: false, sourceId, config: loadConfig() ?? { engine: engine.kind } } as OperationContext;
   const reads = batchSharedReads(engine);
   const bodyPolicy = await readPageBodyPolicy(engine);
@@ -111,21 +101,8 @@ export async function importManagedFiles(engine: BrainEngine, files: readonly Ma
   const slugs = new Set<string>();
   let rest = files.length;
   await withScreeningPaths(async () => { for (let i = 0; i < files.length; i++) {
-    let { filePath, sourcePath } = files[i]!;
     try {
-      if (isImageFilePath(sourcePath) && process.env.GBRAIN_EMBEDDING_MULTIMODAL !== 'true') {
-        throw opError('invalid_params', 'Image import requires GBRAIN_EMBEDDING_MULTIMODAL=true.',
-          `${sourcePath} is an image and multimodal embeddings are off, so it was not imported. Import only text files, or ask the user whether to enable GBRAIN_EMBEDDING_MULTIMODAL=true for the gbrain process (image embeddings can cost money).`);
-      }
-      if (unowned) throw unowned;
-      const root = join(binding!.local_path!, binding!.relative_path);
-      const inputPath = resolve(filePath);
-      const canonicalRelative = relative(root, inputPath);
-      const canonicalInput = canonicalRelative && !isAbsolute(canonicalRelative) && canonicalRelative !== '..' && !canonicalRelative.startsWith(`..${sep}`);
-      if (canonicalInput && !opts.slugRoot) sourcePath = canonicalRelative;
-      const path = canonicalInput ? canonicalRelative : sourcePath;
-      const target = resolve(root, path);
-      await assertImportPaths(reads, sourceId, root, inputPath, target);
+      const { sourcePath, path, inputPath, target } = await managedImportTarget(reads, { sourceId, binding, unowned }, files[i]!, opts);
       const streamed = await managedStreamedIdentity(sourcePath, inputPath, target, bodyPolicy, sourceId);
       const bytes = streamed ? null : readImportBytes(inputPath);
       const { slug, content } = streamed ? { slug: streamed.slug, content: undefined } : managedImportContent(sourcePath, bytes!, opts.activePack);
@@ -138,6 +115,72 @@ export async function importManagedFiles(engine: BrainEngine, files: readonly Ma
   if (planned.length) await importPlanned(ctx, binding!, planned, opts, fail, (i, value) => { settled[i] = { status: 'fulfilled', value }; });
   if (rest < files.length) settled.splice(rest, files.length - rest, ...await importManagedFiles(engine, files.slice(rest), opts));
   return settled;
+}
+
+/** Trust and owner guards shared by every managed filesystem import. */
+async function managedImportOwner(engine: BrainEngine, opts: { sourceId?: string; signal?: AbortSignal }) {
+  const caller = currentSubmissionAuthority();
+  if (caller && caller.kind !== 'application' || currentVerifiedLocalWriter()?.remote) {
+    throw trustedCliRequired('Managed filesystem import requires the trusted local CLI.');
+  }
+  opts.signal?.throwIfAborted();
+  const sourceId = opts.sourceId ?? 'default';
+  const binding = await getWorktreeBinding(engine, sourceId);
+  const unowned = !binding?.local_path || binding.owner_host_id !== localHostId() || binding.state !== 'active'
+    ? opError('owner_unavailable', 'Managed import must run on the active canonical owner for the selected source.',
+      `This host is not the active owner of source ${sourceId}, so nothing was imported. Run the import on the owner host that writer status names, or wait until its owner is active.`,
+      { fix: readFix(`Shows source ${sourceId}'s owner host and state, read-only.`, { argv: ['gbrain', 'sources', 'writer', 'status', '--source', sourceId, '--json'] }) }) : null;
+  return { sourceId, binding, unowned };
+}
+
+/** Per-file path guards shared by every managed filesystem import. */
+async function managedImportTarget(reads: BrainEngine, owner: Awaited<ReturnType<typeof managedImportOwner>>, file: ManagedImportFile,
+  opts: { slugRoot?: string }) {
+  let { filePath, sourcePath } = file;
+  if (isImageFilePath(sourcePath) && process.env.GBRAIN_EMBEDDING_MULTIMODAL !== 'true') {
+    throw opError('invalid_params', 'Image import requires GBRAIN_EMBEDDING_MULTIMODAL=true.',
+      `${sourcePath} is an image and multimodal embeddings are off, so it was not imported. Import only text files, or ask the user whether to enable GBRAIN_EMBEDDING_MULTIMODAL=true for the gbrain process (image embeddings can cost money).`);
+  }
+  if (owner.unowned) throw owner.unowned;
+  const root = join(owner.binding!.local_path!, owner.binding!.relative_path);
+  const inputPath = resolve(filePath);
+  const canonicalRelative = relative(root, inputPath);
+  const canonicalInput = canonicalRelative && !isAbsolute(canonicalRelative) && canonicalRelative !== '..' && !canonicalRelative.startsWith(`..${sep}`);
+  if (canonicalInput && !opts.slugRoot) sourcePath = canonicalRelative;
+  const path = canonicalInput ? canonicalRelative : sourcePath;
+  const target = resolve(root, path);
+  await assertImportPaths(reads, owner.sourceId, root, inputPath, target);
+  return { sourcePath, path, inputPath, target };
+}
+
+/**
+ * Same guards and normalised content as importManagedFile, but the page is published
+ * without writing the canonical file: for mirrors of Markdown kept outside the source root.
+ */
+export async function importManagedDatabaseOnly(engine: BrainEngine, filePath: string, sourcePath: string,
+  opts: { sourceId?: string; noEmbed?: boolean; activePack?: ImportPack; signal?: AbortSignal; slugRoot?: string } = {}): Promise<ImportResult> {
+  const owner = await managedImportOwner(engine, opts);
+  const pre = await managedImportTarget(engine, owner, { filePath, sourcePath }, opts);
+  if (!/\.mdx?$/i.test(pre.sourcePath)) throw new OperationError('invalid_params', 'Database-only import supports Markdown files only.');
+  const normalised = managedImportContent(pre.sourcePath, readImportBytes(pre.inputPath), opts.activePack);
+  // Same key the coordinator stores (submitPageMutation lowercases); a mixed-case frontmatter slug would miss its revision.
+  const slug = normalised.slug.toLowerCase(), content = normalised.content;
+  const ctx = { engine, remote: false, sourceId: owner.sourceId, config: loadConfig() ?? { engine: engine.kind } } as OperationContext;
+  await initializeLocalPersistence(ctx);
+  const snapshot = await engine.readPageSnapshot(slug, { sourceId: owner.sourceId, includeDeleted: true });
+  // Creation (including after a purge) is always a new intent; only an existing revision may replay.
+  let requestId = snapshot ? importWriteRequestId(owner.sourceId, slug, content, snapshot.revision) : randomUUID();
+  const prior = snapshot ? await getWriteRequest(engine, await requestPrincipalForContext(ctx), requestId) : null;
+  if (prior && ['failed', 'conflict', 'cancelled'].includes(prior.state)) requestId = randomUUID();
+  const current = await getWorktreeBinding(engine, owner.sourceId);
+  if (!current || current.state !== 'active' || String(current.owner_epoch) !== String(owner.binding!.owner_epoch)) {
+    throw new OperationError('owner_unavailable', 'The import owner changed.');
+  }
+  const r = await submitPageMutation(ctx, { operation: 'put_page', waitMs: IMPORT_WAIT_MS, databaseOnly: 'database_only_import', params: {
+    request_id: requestId, source_id: owner.sourceId, slug, content, allow_empty: true, ingested_via: 'cli:import',
+    ...(snapshot ? { expected_revision: snapshot.revision } : {}) } });
+  return { slug: typeof r.slug === 'string' && r.slug ? r.slug : slug,
+    status: r.noop === true || r.status === 'duplicate' ? 'skipped' : 'imported', chunks: Number(r.chunks ?? 0) };
 }
 
 async function importPlanned(ctx: OperationContext, binding: WorktreeBinding,
