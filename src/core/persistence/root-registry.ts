@@ -36,13 +36,16 @@ function syncDirectory(directory: string): void {
     if (!(process.platform === 'win32' && ['EISDIR', 'EPERM', 'EINVAL', 'ENOTSUP'].includes((error as NodeJS.ErrnoException).code ?? ''))) throw error;
   } finally { if (fd !== undefined) closeSync(fd); }
 }
-function writePrivateRecord(file: string, value: string): void {
-  if (existsSync(file) && readFileSync(file, 'utf8') === value) { chmodSync(file, 0o600); return; }
+// An unconditional chmod dirties the inode (ctime) on every refresh tick, even when nothing changed.
+function ensurePrivateMode(path: string, mode: number): void { if ((statSync(path).mode & 0o777) !== mode) chmodSync(path, mode); }
+function writePrivateRecord(file: string, value: string): boolean {
+  if (existsSync(file) && readFileSync(file, 'utf8') === value) { ensurePrivateMode(file, 0o600); return false; }
   const temporary = `${file}.${randomUUID()}.tmp`;
   const fd = openSync(temporary, 'wx', 0o600);
   try { writeFileSync(fd, value); fsyncSync(fd); } finally { closeSync(fd); }
   try { renameSync(temporary, file); syncDirectory(dirname(file)); }
   finally { try { unlinkSync(temporary); } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; } }
+  return true;
 }
 function markerExists(path: string): boolean {
   try { lstatSync(path); return true; }
@@ -97,21 +100,22 @@ function resolveFilesystemPath(path: string, realpath: (path: string) => string)
 export function recordManagedRoots(brainId: string, records: ManagedRootRecord[]): void {
   if (!/^[a-f0-9-]{36}$/i.test(brainId)) throw new OperationError('storage_error', 'Invalid managed-root brain identity.');
   if (!records.length) return;
-  const directory = registryDirectory(); mkdirSync(directory, { recursive: true, mode: 0o700 }); chmodSync(directory, 0o700);
+  const directory = registryDirectory(); mkdirSync(directory, { recursive: true, mode: 0o700 }); ensurePrivateMode(directory, 0o700);
+  let changed = false;
   for (const record of records) {
     const root = canonicalFilesystemPath(record.local_path);
     const key = createHash('sha256').update(root).digest('hex');
     const file = join(directory, `${brainId}.${key}.json`);
     const value = JSON.stringify({ version: 1, brain_id: brainId, root, ...record, local_path: root,
       ...(record.topology_generation != null ? { topology_generation: String(record.topology_generation) } : {}) });
-    writePrivateRecord(file, value);
+    changed = writePrivateRecord(file, value) || changed;
     if (existsSync(root) && statSync(root).isDirectory()) {
       const metadata = enclosingGitMetadata(root);
       const marker = metadata ? join(metadata, 'gbrain-managed.json') : join(root, '.gbrain-managed');
       if (!existsSync(marker)) writePrivateRecord(marker, JSON.stringify({ version: 1, managed: true, brain_id: brainId }));
     }
   }
-  syncDirectory(directory);
+  if (changed) syncDirectory(directory);
 }
 /** Available before connect, including while another process owns local PGLite. */
 export function registeredManagedRoots(): string[] {
