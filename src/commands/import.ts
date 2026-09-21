@@ -6,6 +6,7 @@ import { cpus, totalmem } from 'os';
 import type { BrainEngine } from '../core/engine.ts';
 import { importFile, importImageFile, isImageFilePath } from '../core/import-file.ts';
 import { currentCompanyBrainSync, getCompanyBrainProfile, importCompanyBrainFile } from '../core/company-brain/profile.ts';
+import { importContentThroughWriter } from '../core/persistence/page-mutations.ts';
 import { loadConfig, gbrainPath } from '../core/config.ts';
 import { createProgress } from '../core/progress.ts';
 import { getCliOptions, cliOptsToProgressOptions } from '../core/cli-options.ts';
@@ -218,6 +219,8 @@ export async function runImport(
   // #3969: opt back into per-poll ingest_log rows (default: no-op runs skip the write).
   const logNoop = args.includes('--log-noop');
   const includeGitignored = args.includes('--include-gitignored') || opts.includeGitignored === true;
+  // Mirrors of files kept elsewhere: publish through the coordinator without writing into the canonical root.
+  const databaseOnly = args.includes('--database-only');
 
   // #3637: under --json, stdout belongs to the JSON document alone. The
   // informational lines below are useful — they just belong on the other
@@ -637,7 +640,10 @@ export async function runImport(
       // up images when GBRAIN_EMBEDDING_MULTIMODAL=true so this branch is
       // unreachable when the gate is off; defense-in-depth check anyway.
       const result = company ? await importCompanyBrainFile(eng, filePath, sourceId!) : managedImport
-        ? await importManagedFile(eng, filePath, importRelPath, { noEmbed, sourceId, activePack: importActivePack, signal, slugRoot: opts.slugRoot })
+        ? databaseOnly
+          ? await importFile(eng, filePath, importRelPath, { noEmbed, sourceId, activePack: importActivePack,
+            contentWriter: (slug: string, content: string) => importContentThroughWriter(eng, sourceId ?? 'default', slug, content) })
+          : await importManagedFile(eng, filePath, importRelPath, { noEmbed, sourceId, activePack: importActivePack, signal, slugRoot: opts.slugRoot })
         : isImageFilePath(relativePath) && process.env.GBRAIN_EMBEDDING_MULTIMODAL === 'true'
         ? await importImageFile(eng, filePath, importRelPath, { noEmbed, sourceId })
         : await importFile(eng, filePath, importRelPath, { noEmbed, sourceId, activePack: importActivePack });
