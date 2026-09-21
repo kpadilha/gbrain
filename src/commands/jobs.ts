@@ -2923,11 +2923,13 @@ export async function registerBuiltinHandlers(
     const olderThanHours = typeof job.data.olderThanHours === 'number' ? job.data.olderThanHours : 72;
     const dryRun = !!job.data.dryRun;
     let pagesPurged = 0;
+    let pagesBlocked: Array<{ source_id: string; slug: string; code: string; reason: string }> = [];
     let sourcesPurged: string[] = [];
     if (scope === 'pages' || scope === 'all') {
       const { purgeExpiredPages } = await import('../core/persistence/page-mutations.ts');
       const result = await purgeExpiredPages(engine, olderThanHours);
       pagesPurged = result.count;
+      pagesBlocked = result.blocked;
     }
     let sourcesBlocked: Array<{ id: string; reason: string }> = [];
     if (scope === 'sources' || scope === 'all') {
@@ -2939,7 +2941,7 @@ export async function registerBuiltinHandlers(
     // GC stale op_checkpoints rows (folded scope item +C from review).
     const { purgeStaleCheckpoints } = await import('../core/op-checkpoint.ts');
     const checkpointsPurged = await purgeStaleCheckpoints(engine, 7);
-    return { pagesPurged, sourcesPurged, sourcesBlocked, checkpointsPurged, dryRun };
+    return { pagesPurged, pagesBlocked, sourcesPurged, sourcesBlocked, checkpointsPurged, dryRun };
   });
 
   // Phase-wrapper handlers — each delegates to runCycle({ phases: [name] }).

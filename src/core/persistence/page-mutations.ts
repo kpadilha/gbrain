@@ -77,18 +77,28 @@ export function purgeWriteRequestId(sourceId: string, slug: string, revision: st
   return derivedRequestId(`purge-v1\0${sourceId}\0${slug}\0${revision}`);
 }
 /**
+ * Refusals tied to one tombstone's own state; they persist until an operator repairs
+ * that page, so they must not fail the sweep. Anything else (DB, owner, lock, pending) does.
+ */
+const PER_TOMBSTONE_REFUSALS = new Set(['source_changed', 'revision_conflict', 'page_identity_changed', 'page_not_found', 'idempotency_conflict']);
+export interface PurgeExpiredPagesResult {
+  slugs: string[];
+  count: number;
+  blocked: { source_id: string; slug: string; code: string; reason: string }[];
+}
+/**
  * Hard-deletes tombstones older than the cutoff. A managed brain fences the direct DELETE,
  * so each one goes through the coordinator as a trusted local `delete --purge`.
- * Archived sources are left to the source lifecycle purge; any failure throws after the sweep.
+ * Archived sources are left to the source lifecycle purge; per-tombstone refusals come back as blocked.
  */
-export async function purgeExpiredPages(engine: OperationContext['engine'], olderThanHours: number): Promise<{ slugs: string[]; count: number }> {
-  if (!(await managedPersistenceEnabled(engine))) return engine.purgeDeletedPages(olderThanHours);
+export async function purgeExpiredPages(engine: OperationContext['engine'], olderThanHours: number): Promise<PurgeExpiredPagesResult> {
+  if (!(await managedPersistenceEnabled(engine))) return { ...await engine.purgeDeletedPages(olderThanHours), blocked: [] };
   const rows = await engine.executeRaw<{ source_id: string; slug: string }>(`SELECT p.source_id, p.slug FROM pages p
     JOIN sources s ON s.id = p.source_id AND s.archived = false
     WHERE p.deleted_at IS NOT NULL AND p.deleted_at < now() - make_interval(hours => $1::int)
     ORDER BY p.deleted_at ASC, p.source_id ASC, p.slug ASC`, [Math.max(0, Math.floor(olderThanHours))]);
   const slugs: string[] = [];
-  const failures: string[] = [];
+  const blocked: PurgeExpiredPagesResult['blocked'] = [];
   for (const { source_id: sourceId, slug } of rows) {
     try {
       const ctx = localWriteContext(engine, sourceId);
@@ -101,13 +111,11 @@ export async function purgeExpiredPages(engine: OperationContext['engine'], olde
         request_id: requestId, source_id: sourceId, slug, expected_revision: snapshot.revision, purge: true } });
       if (r.status === 'purged') slugs.push(slug);
     } catch (error) {
-      failures.push(`${sourceId}:${slug}: ${error instanceof Error ? error.message : String(error)}`);
+      if (!(error instanceof OperationError) || !PER_TOMBSTONE_REFUSALS.has(error.code)) throw error;
+      blocked.push({ source_id: sourceId, slug, code: error.code, reason: error.message });
     }
   }
-  if (failures.length) {
-    throw new OperationError('storage_error', `Purged ${slugs.length} tombstone(s); ${failures.length} failed. First: ${failures[0]}`);
-  }
-  return { slugs, count: slugs.length };
+  return { slugs, count: slugs.length, blocked };
 }
 export async function submitPageMutation(ctx: OperationContext,
   input: { operation: string; params: Record<string, unknown>; waitMs?: number; managedFileImport?: true }): Promise<Record<string, unknown>> {
