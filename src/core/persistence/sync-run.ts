@@ -9,7 +9,12 @@ import { getWriteRequest, admitWrite, receiptFor } from './journal.ts';
 import { assertPersistenceAccepting, foregroundWriteCompletions, startPersistenceConsumer, waitForWrite } from './service.ts';
 import { discoverManagedSync, resolveManagedSyncContext, readSyncContent, readSyncFile, syncGit, type SyncDiscovery } from './sync-discovery.ts';
 import { managedSyncAuthority, validateSyncAuthority, validateManagedSyncOptions, type SyncAuthority } from './sync-authority.ts';
-import type { SyncIntent } from './sync-prepare.ts';
+import { syncFileOverlay, type SyncIntent } from './sync-prepare.ts';
+import { importFromContent } from '../import-file.ts';
+import { isCodeFilePath } from '../sync.ts';
+import { loadActivePackForEngine } from '../schema-pack/engine-resolution.ts';
+import type { PreparedContentImport } from './prepared-import.ts';
+import { basename } from 'node:path';
 import { currentCompanyBrainSync, getCompanyBrainProfile, readCompanyBrainPlan } from '../company-brain/profile.ts';
 import { readCommittedBlob } from '../company-brain/revision.ts';
 import { refreshProjectionStatistics } from '../search/projection-statistics.ts';
@@ -149,6 +154,29 @@ async function freezeEntry(engine: BrainEngine, cursor: Cursor, key: string): Pr
       policyFingerprint: currentCompanyBrainSync(cursor.sourceId)!.policyFingerprint } } : {}) } };
 }
 
+/**
+ * Every admission spends a permanent request ID, so a file whose publication would be a
+ * pure no-op (same prepared page, same origin, no file overlay) is never admitted.
+ */
+async function withoutUnchangedImports(engine: BrainEngine, discovery: SyncDiscovery): Promise<SyncDiscovery['entries']> {
+  const activePack = (await loadActivePackForEngine(engine, { remote: false, sourceId: discovery.sourceId }).catch(() => null))?.manifest;
+  const kept: SyncDiscovery['entries'] = [];
+  for (const entry of discovery.entries) {
+    if (entry.action !== 'import' || entry.pageId == null || isCodeFilePath(entry.sourcePath)) { kept.push(entry); continue; }
+    const snapshot = await engine.readPageSnapshot(entry.slug!, { sourceId: discovery.sourceId, includeDeleted: true });
+    if (!snapshot || snapshot.page.deleted_at != null || snapshot.revision !== entry.revision || snapshot.page.source_path !== entry.sourcePath) {
+      kept.push(entry); continue;
+    }
+    const content = readSyncContent(discovery, entry);
+    let prepared: PreparedContentImport | undefined;
+    await importFromContent(engine, entry.slug!, content, { sourceId: discovery.sourceId, noEmbed: true, remote: false, activePack,
+      filename: basename(entry.sourcePath).replace(/\.mdx?$/i, ''), sourcePath: entry.sourcePath, allowEmptyOverwrite: true,
+      prepare: async value => { prepared = value; return value.result; } });
+    if (!prepared?.noop || prepared.slug !== entry.slug || syncFileOverlay(content, entry.slug!, prepared.parsedPage, snapshot.tags, activePack)) kept.push(entry);
+  }
+  return kept;
+}
+
 /** One immutable page is admitted at a time; foreground writes can never sit behind a whole scan. */
 export async function performManagedSync(engine: BrainEngine, opts: SyncOpts, slice?: { maxPages: number; maxMs: number }): Promise<SyncResult> {
   if (opts.sourceId && !currentCompanyBrainSync(opts.sourceId) && await getCompanyBrainProfile(engine, opts.sourceId)) {
@@ -208,6 +236,7 @@ export async function performManagedSync(engine: BrainEngine, opts: SyncOpts, sl
       phase = 'discovery';
       discoveryTarget = company?.plan.revision?.commit ?? syncGit(context.gitRoot, ['rev-parse', 'HEAD']).trim();
       const discovery = await discoverManagedSync(engine, opts, context);
+      if (!opts.dryRun && !authority.writer.remote && !company) discovery.entries = await withoutUnchangedImports(engine, discovery);
       const fresh: Cursor = { ...discovery, authority, runId: discoveryRun, index: 0, counts: { added: 0, modified: 0, deleted: 0, chunks: 0 }, ...(company ? { companyReceiptId: company.receiptId } : {}) };
       if (opts.dryRun) return result(fresh, 'dry_run');
       if (!fresh.entries.length && fresh.from === fresh.target) { await clearManagedSyncFailureAfterSuccess(engine, key); return result(fresh, 'up_to_date'); }
