@@ -1116,6 +1116,8 @@ export async function importFromFile(
     activePack?: { page_types: ReadonlyArray<{ name: string; path_prefixes: ReadonlyArray<string>; aliases?: ReadonlyArray<string> }> };
     /** Git first-commit date of the file (opt-in, see git-first-commit.ts); an undated page's fallback anchor. */
     firstCommitAt?: Date;
+    /** Publishes the prepared markdown instead of the legacy direct writer (managed brains). */
+    contentWriter?: (slug: string, content: string) => Promise<ImportResult>;
   } = {},
 ): Promise<ImportResult> {
   // Defense-in-depth: reject symlinks before reading content.
@@ -1267,6 +1269,7 @@ export async function importFromFile(
   // v0.29.1: thread the basename (without extension) for filename-date
   // precedence in computeEffectiveDate. e.g. `daily/2024-03-15.md` →
   // filename `2024-03-15`.
+  if (opts.contentWriter) return opts.contentWriter(resolvedSlug, content);
   const fileBasename = basename(relativePath, '.md');
   const imported = await importFromContent(engine, resolvedSlug, content, {
     ...opts,
