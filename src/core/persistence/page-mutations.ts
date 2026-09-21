@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { realpathSync } from 'node:fs';
 import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import type { OperationContext } from '../ops/contract.ts';
@@ -9,6 +9,7 @@ import { computeContentHash } from '../ingestion/types.ts';
 import { resolveSlugForPath } from '../sync.ts';
 import { scannerSlugRootMode, scannerSourcePath } from '../write-through.ts';
 import { sha256 } from './digest.ts';
+import { loadConfig } from '../config.ts';
 import { assertPersistenceAccepting, estimatedRetryAfterMs, waitForWrite, writeResponse } from './service.ts';
 import { parseWireWriteWaitMs } from './write-wait.ts';
 import { admitWrite, assertPageRequestIdentity, assertReplayIntent, getWriteRequest, intentDigest, type WriteAdmission } from './journal.ts';
@@ -127,6 +128,36 @@ async function resolveCaptureFile(ctx: OperationContext, sourceId: string, p: Re
   p.capture_path = capturePath;
   const canonicalRoot = realpathSync(root);
   return resolveSlugForPath(scannerSourcePath(canonicalRoot, join(canonicalRoot, capturePath), await scannerSlugRootMode(ctx.engine, sourceId, canonicalRoot)));
+}
+
+/** Trusted local CLI context for machine importers that submit through the coordinator. */
+export function localWriteContext(engine: OperationContext['engine'], sourceId: string): OperationContext {
+  return { engine, sourceId, config: loadConfig() ?? { engine: engine.kind },
+    logger: { info() {}, warn() {}, error() {} }, dryRun: false, remote: false };
+}
+/**
+ * Replay ID for a machine re-import: identical bytes over the same page revision
+ * replay the retained receipt, so an unchanged rescan admits no new request.
+ */
+export function importWriteRequestId(sourceId: string, slug: string, content: string, revision: string | null): string {
+  const hex = createHash('sha256').update(`import-v1\0${sourceId}\0${slug}\0${revision ?? ''}\0${content}`).digest('hex').slice(0, 32);
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-5${hex.slice(13, 16)}-${((parseInt(hex[16], 16) & 3) | 8).toString(16)}${hex.slice(17, 20)}-${hex.slice(20)}`;
+}
+/** Legacy `gbrain import` semantics (database-only replacement), admitted through the coordinator. */
+export async function importContentThroughWriter(engine: OperationContext['engine'], sourceId: string, slug: string,
+  content: string): Promise<{ slug: string; status: 'imported' | 'skipped'; chunks: number }> {
+  const ctx = localWriteContext(engine, sourceId);
+  const key = slug.toLowerCase();
+  const snapshot = await engine.readPageSnapshot(key, { sourceId, includeDeleted: true });
+  // Creation (including after a purge) is always a new intent; only an existing revision may replay.
+  let requestId = snapshot ? importWriteRequestId(sourceId, key, content, snapshot.revision) : randomUUID();
+  const prior = snapshot ? await getWriteRequest(engine, await requestPrincipalForContext(ctx), requestId) : null;
+  if (prior && ['failed', 'conflict', 'cancelled'].includes(prior.state)) requestId = randomUUID();
+  const r = await submitPageMutation(ctx, { operation: 'put_page', waitMs: 60_000, params: {
+    request_id: requestId, source_id: sourceId, slug: key, content, force: true, database_only: true,
+    allow_empty: true, ingested_via: 'cli:import' } });
+  return { slug: typeof r.slug === 'string' && r.slug ? r.slug : key, status: r.noop === true || r.status === 'duplicate' ? 'skipped' : 'imported',
+    chunks: Number(r.chunks ?? 0) };
 }
 
 function pendingAwareResponse(ctx: OperationContext, row: WriteRequest): Record<string, unknown> {
