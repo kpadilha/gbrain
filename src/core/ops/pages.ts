@@ -413,7 +413,7 @@ const purge_deleted_pages: Operation = {
     const olderThanHours = (p.older_than_hours as number | undefined) ?? 72;
     if (ctx.dryRun) return { dry_run: true, action: 'purge_deleted_pages', older_than_hours: olderThanHours };
     const result = await purgeExpiredPages(ctx.engine, olderThanHours);
-    return { status: 'purged', count: result.count, slugs: result.slugs };
+    return { status: 'purged', count: result.count, slugs: result.slugs, blocked: result.blocked };
   },
   cliHints: { name: 'purge-deleted' },
 };

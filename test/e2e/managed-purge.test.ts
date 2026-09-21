@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
-import { existsSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { BrainEngine } from '../../src/core/engine.ts';
@@ -14,6 +14,7 @@ import { withEnv } from '../helpers/with-env.ts';
 import { hasDatabase, setupDB, teardownDB } from './helpers.ts';
 
 const SLUG = 'notes/expired-tombstone';
+const EDITED = 'notes/edited-tombstone';
 
 function managedPurgeSuite(label: string, open: () => Promise<BrainEngine>, close: (e: BrainEngine) => Promise<void>) {
   describe(`expired tombstones on a managed brain (${label})`, () => {
@@ -32,15 +33,21 @@ function managedPurgeSuite(label: string, open: () => Promise<BrainEngine>, clos
         await claimWorktree(engine, 'default', repoRoot);
         expect((await activatePersistence(engine, { confirmQuiesced: true })).enabled).toBe(true);
         const ctx = localWriteContext(engine, 'default');
-        await submitPageMutation(ctx, { operation: 'put_page', waitMs: 60_000,
-          params: { source_id: 'default', slug: SLUG, content: '---\ntitle: Expired\ntype: note\n---\n\nGone soon.\n' } });
-        const live = await engine.readPageSnapshot(SLUG, { sourceId: 'default' });
-        await submitPageMutation(ctx, { operation: 'delete_page', waitMs: 60_000,
-          params: { source_id: 'default', slug: SLUG, expected_revision: live!.revision } });
+        for (const slug of [SLUG, EDITED]) {
+          await submitPageMutation(ctx, { operation: 'put_page', waitMs: 60_000,
+            params: { source_id: 'default', slug, content: '---\ntitle: Expired\ntype: note\n---\n\nGone soon.\n' } });
+          expect(existsSync(join(repoRoot, `${slug}.md`))).toBe(true);
+          const live = await engine.readPageSnapshot(slug, { sourceId: 'default' });
+          await submitPageMutation(ctx, { operation: 'delete_page', waitMs: 60_000,
+            params: { source_id: 'default', slug, expected_revision: live!.revision } });
+          expect(existsSync(join(repoRoot, `${slug}.md`))).toBe(false);
+        }
+        // An uncoordinated local edit at the tombstone's path: the coordinator must refuse to remove it.
+        writeFileSync(join(repoRoot, `${EDITED}.md`), '---\ntitle: Expired\ntype: note\n---\n\nEdited by hand.\n');
         // Clock travel past the 72 h window, under the capability the coordinator itself holds.
         await engine.transaction(async tx => {
           await tx.executeRaw(`SELECT set_config('gbrain.write_sources','["default"]',true)`);
-          await tx.executeRaw(`UPDATE pages SET deleted_at = now() - interval '73 hours' WHERE source_id='default' AND slug=$1`, [SLUG]);
+          await tx.executeRaw(`UPDATE pages SET deleted_at = now() - interval '73 hours' WHERE source_id='default'`);
         });
         revision = (await engine.readPageSnapshot(SLUG, { sourceId: 'default', includeDeleted: true }))!.revision;
       });
@@ -55,22 +62,26 @@ function managedPurgeSuite(label: string, open: () => Promise<BrainEngine>, clos
     });
 
     const purgeRequests = async () => engine.executeRaw<{ id: string; request_id: string; state: string }>(
-      `SELECT id::text, request_id::text, state FROM persistence_requests WHERE operation='delete_page' AND slug=$1 AND intent->>'purge'='true'`, [SLUG]);
+      `SELECT id::text, request_id::text, state FROM persistence_requests WHERE operation='delete_page' AND slug=$1 AND intent->>'purge'='true' AND state='committed'`, [SLUG]);
+    const tombstone = (sourceId: string, slug: string) => engine.readPageSnapshot(slug, { sourceId, includeDeleted: true });
 
-    test('the global lane purges through the coordinator and stamps last_global_at', async () => {
+    test('a locally edited tombstone is reported as blocked while the rest purge and last_global_at is stamped', async () => {
       await withEnv({ GBRAIN_HOME: home }, async () => {
-        expect(existsSync(join(repoRoot, `${SLUG}.md`))).toBe(false);
         expect(await engine.getConfig(LAST_GLOBAL_AT_KEY)).toBeNull();
         const handlers = new Map<string, (job: unknown) => Promise<any>>();
         await registerBuiltinHandlers({ register: (name: string, fn: (job: unknown) => Promise<any>) => handlers.set(name, fn) } as never, engine);
         const result = await handlers.get('autopilot-global-maintenance')!({ id: 7301, data: { phases: ['purge'], repoPath: repoRoot } });
         const purge = result.report.phases.find((p: { phase: string }) => p.phase === 'purge');
         expect({ status: purge.status, stamped: await engine.getConfig(LAST_GLOBAL_AT_KEY) !== null, error: purge.error?.message ?? purge.summary })
-          .toMatchObject({ status: 'ok', stamped: true });
-        expect(purge.details.purged_pages_count).toBe(1);
-        expect(await engine.readPageSnapshot(SLUG, { sourceId: 'default', includeDeleted: true })).toBeNull();
+          .toMatchObject({ status: 'warn', stamped: true });
+        expect(purge.details.purged_page_slugs).toEqual([SLUG]);
+        expect(purge.details.purged_pages_blocked).toMatchObject([{ source_id: 'default', slug: EDITED, code: 'source_changed' }]);
+        expect(purge.summary).toContain('1 blocked');
+        expect(await tombstone('default', SLUG)).toBeNull();
+        expect((await tombstone('default', EDITED))?.page.deleted_at).toBeTruthy();
+        expect(existsSync(join(repoRoot, `${EDITED}.md`))).toBe(true);
         const rows = await purgeRequests();
-        expect(rows.map(r => [r.request_id, r.state])).toEqual([[purgeWriteRequestId('default', SLUG, revision), 'committed']]);
+        expect(rows.map(r => r.request_id)).toEqual([purgeWriteRequestId('default', SLUG, revision)]);
       });
     }, 120_000);
 
