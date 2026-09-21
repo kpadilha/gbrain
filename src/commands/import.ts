@@ -5,6 +5,8 @@ import { isAbsolute, join, relative, resolve, sep } from 'path';
 import { cpus, totalmem } from 'os';
 import type { BrainEngine } from '../core/engine.ts';
 import { importFile, importImageFile, isImageFilePath } from '../core/import-file.ts';
+import { managedPersistenceEnabled } from '../core/persistence/ownership.ts';
+import { importContentThroughWriter } from '../core/persistence/page-mutations.ts';
 import { loadConfig, gbrainPath } from '../core/config.ts';
 import { createProgress } from '../core/progress.ts';
 import { getCliOptions, cliOptsToProgressOptions } from '../core/cli-options.ts';
@@ -607,6 +609,8 @@ export async function runImport(
     progress.tick(1, `imported=${imported} skipped=${skipped} errors=${errors}`);
   }
 
+  // A managed brain fences the direct writer; markdown goes through the coordinator instead.
+  const managedImport = await managedPersistenceEnabled(engine);
   async function processFile(eng: BrainEngine, filePath: string) {
     if (signal?.aborted) return;
     const relativePath = relative(dir, filePath);
@@ -626,7 +630,8 @@ export async function runImport(
       // unreachable when the gate is off; defense-in-depth check anyway.
       const result = isImageFilePath(relativePath) && process.env.GBRAIN_EMBEDDING_MULTIMODAL === 'true'
         ? await importImageFile(eng, filePath, importRelPath, { noEmbed, sourceId })
-        : await importFile(eng, filePath, importRelPath, { noEmbed, sourceId, activePack: importActivePack });
+        : await importFile(eng, filePath, importRelPath, { noEmbed, sourceId, activePack: importActivePack,
+          ...(managedImport ? { contentWriter: (slug: string, content: string) => importContentThroughWriter(eng, sourceId ?? 'default', slug, content) } : {}) });
       // An import that landed while cancellation arrived is still complete.
       // Account for it before stopping, so resume never loses a successful path.
       noteTypeWarning((result as { type_warning?: Parameters<typeof noteTypeWarning>[0] }).type_warning);
