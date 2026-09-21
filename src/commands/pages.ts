@@ -44,7 +44,8 @@ async function runPurgeDeleted(engine: BrainEngine, args: string[]): Promise<voi
     return;
   }
 
-  const result = await engine.purgeDeletedPages(olderThanHours);
+  const { purgeExpiredPages } = await import('../core/persistence/page-mutations.ts');
+  const result = await purgeExpiredPages(engine, olderThanHours);
   if (json) {
     console.log(JSON.stringify({ older_than_hours: olderThanHours, count: result.count, slugs: result.slugs }, null, 2));
     return;

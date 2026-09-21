@@ -11,7 +11,7 @@ import { assertPersistenceAccepting, waitForWrite, writeResponse } from './servi
 import { admitWrite, assertPageRequestIdentity, assertReplayIntent, getWriteRequest, intentDigest } from './journal.ts';
 import { submissionAuthority, authorizeStoredRequest } from './authority.ts';
 import { currentVerifiedLocalWriter, localHostId, readLocalWriter, registerLocalWriter } from './identity.ts';
-import { claimWorktree, getWorktreeBinding } from './ownership.ts';
+import { claimWorktree, getWorktreeBinding, managedPersistenceEnabled } from './ownership.ts';
 import { parseMutationPrecondition } from './preconditions.ts';
 import { assertPurgeParams } from './purge-params.ts';
 import type { Principal } from './model.ts';
@@ -50,7 +50,10 @@ export function localWriteContext(engine: OperationContext['engine'], sourceId: 
  * replay the retained receipt, so an unchanged rescan admits no new request.
  */
 export function importWriteRequestId(sourceId: string, slug: string, content: string, revision: string | null): string {
-  const hex = createHash('sha256').update(`import-v1\0${sourceId}\0${slug}\0${revision ?? ''}\0${content}`).digest('hex').slice(0, 32);
+  return derivedRequestId(`import-v1\0${sourceId}\0${slug}\0${revision ?? ''}\0${content}`);
+}
+function derivedRequestId(material: string): string {
+  const hex = createHash('sha256').update(material).digest('hex').slice(0, 32);
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-5${hex.slice(13, 16)}-${((parseInt(hex[16], 16) & 3) | 8).toString(16)}${hex.slice(17, 20)}-${hex.slice(20)}`;
 }
 /** Legacy `gbrain import` semantics (database-only replacement), admitted through the coordinator. */
@@ -68,6 +71,43 @@ export async function importContentThroughWriter(engine: OperationContext['engin
     allow_empty: true, ingested_via: 'cli:import' } });
   return { slug: typeof r.slug === 'string' && r.slug ? r.slug : key, status: r.noop === true || r.status === 'duplicate' ? 'skipped' : 'imported',
     chunks: Number(r.chunks ?? 0) };
+}
+/** Replay ID for a tombstone purge: a rerun over the same revision resumes the same request. */
+export function purgeWriteRequestId(sourceId: string, slug: string, revision: string): string {
+  return derivedRequestId(`purge-v1\0${sourceId}\0${slug}\0${revision}`);
+}
+/**
+ * Hard-deletes tombstones older than the cutoff. A managed brain fences the direct DELETE,
+ * so each one goes through the coordinator as a trusted local `delete --purge`.
+ * Archived sources are left to the source lifecycle purge; any failure throws after the sweep.
+ */
+export async function purgeExpiredPages(engine: OperationContext['engine'], olderThanHours: number): Promise<{ slugs: string[]; count: number }> {
+  if (!(await managedPersistenceEnabled(engine))) return engine.purgeDeletedPages(olderThanHours);
+  const rows = await engine.executeRaw<{ source_id: string; slug: string }>(`SELECT p.source_id, p.slug FROM pages p
+    JOIN sources s ON s.id = p.source_id AND s.archived = false
+    WHERE p.deleted_at IS NOT NULL AND p.deleted_at < now() - make_interval(hours => $1::int)
+    ORDER BY p.deleted_at ASC, p.source_id ASC, p.slug ASC`, [Math.max(0, Math.floor(olderThanHours))]);
+  const slugs: string[] = [];
+  const failures: string[] = [];
+  for (const { source_id: sourceId, slug } of rows) {
+    try {
+      const ctx = localWriteContext(engine, sourceId);
+      const snapshot = await engine.readPageSnapshot(slug, { sourceId, includeDeleted: true });
+      if (!snapshot?.page.deleted_at) continue;
+      let requestId = purgeWriteRequestId(sourceId, slug, snapshot.revision);
+      const prior = await getWriteRequest(engine, await requestPrincipalForContext(ctx), requestId);
+      if (prior && ['failed', 'conflict', 'cancelled'].includes(prior.state)) requestId = randomUUID();
+      const r = await submitPageMutation(ctx, { operation: 'delete_page', waitMs: 60_000, params: {
+        request_id: requestId, source_id: sourceId, slug, expected_revision: snapshot.revision, purge: true } });
+      if (r.status === 'purged') slugs.push(slug);
+    } catch (error) {
+      failures.push(`${sourceId}:${slug}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+  if (failures.length) {
+    throw new OperationError('storage_error', `Purged ${slugs.length} tombstone(s); ${failures.length} failed. First: ${failures[0]}`);
+  }
+  return { slugs, count: slugs.length };
 }
 export async function submitPageMutation(ctx: OperationContext,
   input: { operation: string; params: Record<string, unknown>; waitMs?: number; managedFileImport?: true }): Promise<Record<string, unknown>> {
