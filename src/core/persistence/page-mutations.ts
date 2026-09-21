@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { pageQuarantinedNotice } from '../quarantine.ts';
 import { fenceNormalizedNotice, type FencesNormalized } from '../fence-repair/report.ts';
 import { parseFenceRepairReceipt } from '../fence-repair/receipt.ts';
@@ -16,6 +16,7 @@ import { resolveSlugForPath } from '../sync.ts';
 import { scannerSlugRootMode, scannerSourcePath } from '../write-through.ts';
 import { sha256 } from './digest.ts';
 import { receiptReservation } from './receipt-bytes.ts';
+import { loadConfig } from '../config.ts';
 import { assertPersistenceAccepting, estimatedRetryAfterMs, waiterOnlyOwner, onPersistenceLane, waitForWrite, writeResponse } from './service.ts';
 import { parseWireWriteWaitMs } from './write-wait.ts';
 import { assertTimelineNotOmitted, isTimelineSection, timelineSectionOf, type TimelineSection } from './timeline-omission.ts';
@@ -174,6 +175,20 @@ async function resolveCaptureFile(ctx: OperationContext, sourceId: string, p: Re
   return resolveSlugForPath(scannerSourcePath(canonicalRoot, join(canonicalRoot, capturePath), await scannerSlugRootMode(ctx.engine, sourceId, canonicalRoot)));
 }
 
+/** Trusted local CLI context for machine importers that submit through the coordinator. */
+export function localWriteContext(engine: OperationContext['engine'], sourceId: string): OperationContext {
+  return { engine, sourceId, config: loadConfig() ?? { engine: engine.kind },
+    logger: { info() {}, warn() {}, error() {} }, dryRun: false, remote: false };
+}
+/**
+ * Replay ID for a machine re-import: identical bytes over the same page revision
+ * replay the retained receipt, so an unchanged rescan admits no new request.
+ */
+// v2: the intent moved from force to expected_revision, so v1 ids already accepted by older code must not collide.
+export function importWriteRequestId(sourceId: string, slug: string, content: string, revision: string | null): string {
+  const hex = createHash('sha256').update(`import-v2\0${sourceId}\0${slug}\0${revision ?? ''}\0${content}`).digest('hex').slice(0, 32);
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-5${hex.slice(13, 16)}-${((parseInt(hex[16], 16) & 3) | 8).toString(16)}${hex.slice(17, 20)}-${hex.slice(20)}`;
+}
 export function pendingAwareResponse(ctx: OperationContext, row: WriteRequest): Record<string, unknown> {
   try { return writeResponse(row, { retryAfterMs: estimatedRetryAfterMs(ctx.engine, 1), waiterOnlyOwner: waiterOnlyOwner(ctx.engine) }); } catch (error) {
     // #5929: a trusted local caller is told when an owner on another build ran the failed attempt.
@@ -214,7 +229,7 @@ const OWNER_FILE_INTENTS: ReadonlySet<string> = new Set(['managed_file_import', 
 export interface PageBatchMember { id: string; index: number; size: number; requestId: string; repeats?: number[] }
 
 export async function submitPageMutation(ctx: OperationContext,
-  input: { operation: string; params: Record<string, unknown>; waitMs?: number; managedFileImport?: true; timelineSection?: TimelineSection; databaseOnly?: 'overwrite_restore' }): Promise<Record<string, unknown>> {
+  input: { operation: string; params: Record<string, unknown>; waitMs?: number; managedFileImport?: true; timelineSection?: TimelineSection; databaseOnly?: 'overwrite_restore' | 'database_only_import' }): Promise<Record<string, unknown>> {
   assertPersistenceAccepting(ctx.engine);
   // #6007: wait_ms is a reply deadline from arrival, never part of the write's identity.
   const arrived = performance.now();
@@ -252,7 +267,7 @@ export async function submitPageMutation(ctx: OperationContext,
 export async function preparePageAdmission(ctx: OperationContext,
   input: { operation: string; params: Record<string, unknown>; managedFileImport?: true; batch?: PageBatchMember; timelineSection?: TimelineSection;
     /** #6712 `repair overwritten-edits`: publish to the database only, so the restore never rewrites the committed file. */
-    databaseOnly?: 'overwrite_restore' }
+    databaseOnly?: 'overwrite_restore' | 'database_only_import' }
 ): Promise<{ prior: WriteRequest; admission?: undefined; typeWarning?: undefined; slugAdvisory?: undefined } | { prior?: undefined; admission: WriteAdmission; typeWarning: PageTypeWarning | null; slugAdvisory: string | null }> {
   if (input.operation === 'put_page' && ['kind', 'preview', 'backup_reference'].some(key => Object.hasOwn(input.params, key))) {
     if (ctx.remote !== false || input.managedFileImport !== true || !OWNER_FILE_INTENTS.has(String(input.params.kind)) ||
