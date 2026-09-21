@@ -1160,6 +1160,8 @@ export async function importFromFile(
      * never per file (codex perf finding #7).
      */
     activePack?: { page_types: ReadonlyArray<{ name: string; path_prefixes: ReadonlyArray<string>; aliases?: ReadonlyArray<string> }> };
+    /** Publishes the prepared markdown instead of the legacy direct writer (managed brains). */
+    contentWriter?: (slug: string, content: string) => Promise<ImportResult>;
   } = {},
 ): Promise<ImportResult> {
   // Defense-in-depth: reject symlinks before reading content.
@@ -1319,6 +1321,7 @@ export async function importFromFile(
   // v0.29.1: thread the basename (without extension) for filename-date
   // precedence in computeEffectiveDate. e.g. `daily/2024-03-15.md` →
   // filename `2024-03-15`.
+  if (opts.contentWriter) return opts.contentWriter(resolvedSlug, content);
   const fileBasename = basename(relativePath, '.md');
   return importFromContent(engine, resolvedSlug, content, {
     ...opts,

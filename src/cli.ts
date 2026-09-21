@@ -3889,6 +3889,8 @@ SEARCH
 
 IMPORT/EXPORT
   import <dir> [--no-embed]          Import markdown directory
+  import <dir> --database-only      Managed brains: store pages without writing
+                                     them into the canonical source root
   sync [--repo <path>] [flags]       Git-to-brain incremental sync
   sync --watch [--interval N]        Continuous sync (loops until stopped)
                                      See also: autopilot --install (continuous daemon).
