@@ -9,7 +9,6 @@ import type { BrainEngine } from '../core/engine.ts';
 import { importFile, importImageFile, isImageFilePath, type ImportResult } from '../core/import-file.ts';
 import { gitFirstCommitDates } from '../core/git-first-commit.ts';
 import { currentCompanyBrainSync, getCompanyBrainProfile, importCompanyBrainFile } from '../core/company-brain/profile.ts';
-import { importContentThroughWriter } from '../core/persistence/page-mutations.ts';
 import { loadConfig, gbrainPath } from '../core/config.ts';
 import { createProgress } from '../core/progress.ts';
 import { getCliOptions, cliOptsToProgressOptions } from '../core/cli-options.ts';
@@ -37,7 +36,7 @@ import { realpathOrResolve } from '../core/path-confine.ts';
 import { slog } from '../core/console-prefix.ts';
 import { refreshProjectionStatistics } from '../core/search/projection-statistics.ts';
 import { importAnalyzeEveryPages, maybeRefreshPlannerStats, PLANNER_STATS_REPAIR_COMMAND } from '../core/planner-stats.ts';
-import { importManagedFile } from '../core/persistence/import-mutations.ts';
+import { importManagedDatabaseOnly, importManagedFile } from '../core/persistence/import-mutations.ts';
 import { acceptedPendingReceipt } from '../core/persistence/accepted-pending.ts';
 import { estimateCostFromChars, lookupEmbeddingPrice } from '../core/embedding-pricing.ts';
 import { getEmbeddingModel } from '../core/ai/gateway.ts';
@@ -692,8 +691,7 @@ export async function runImport(
       // unreachable when the gate is off; defense-in-depth check anyway.
       const result = company ? await importCompanyBrainFile(eng, filePath, sourceId!) : managedImport
         ? databaseOnly
-          ? await importFile(eng, filePath, importRelPath, { noEmbed, sourceId, activePack: importActivePack,
-            contentWriter: (slug: string, content: string) => importContentThroughWriter(eng, sourceId ?? 'default', slug, content) })
+          ? await importManagedDatabaseOnly(eng, filePath, importRelPath, { noEmbed, sourceId, activePack: importActivePack, signal, slugRoot: opts.slugRoot })
           : await importManagedFile(eng, filePath, importRelPath, { noEmbed, sourceId, activePack: importActivePack, signal, slugRoot: opts.slugRoot })
         : isImageFilePath(relativePath) && process.env.GBRAIN_EMBEDDING_MULTIMODAL === 'true'
         ? await importImageFile(eng, filePath, importRelPath, { noEmbed, sourceId })
