@@ -88,7 +88,9 @@ export async function importManagedDatabaseOnly(engine: BrainEngine, filePath: s
   opts: ManagedImportOptions = {}): Promise<ImportResult> {
   const pre = await managedImportPreflight(engine, filePath, sourcePath, opts);
   if (!/\.mdx?$/i.test(pre.sourcePath)) throw new OperationError('invalid_params', 'Database-only import supports Markdown files only.');
-  const { slug, content } = managedImportContent(pre.sourcePath, readImportBytes(pre.inputPath), opts.activePack);
+  const normalised = managedImportContent(pre.sourcePath, readImportBytes(pre.inputPath), opts.activePack);
+  // Same key the coordinator stores (submitPageMutation lowercases); a mixed-case frontmatter slug would miss its revision.
+  const slug = normalised.slug.toLowerCase(), content = normalised.content;
   const ctx = { engine, remote: false, sourceId: pre.sourceId, config: loadConfig() ?? { engine: engine.kind } } as OperationContext;
   await initializeLocalPersistence(ctx);
   const snapshot = await engine.readPageSnapshot(slug, { sourceId: pre.sourceId, includeDeleted: true });
