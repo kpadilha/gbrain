@@ -18,6 +18,7 @@
  *   gbrain sources detach        — remove .gbrain-source from CWD
  *   gbrain sources federate <id>   — sources.config.federated = true
  *   gbrain sources unfederate <id> — sources.config.federated = false
+ *   gbrain sources sync-writeback <id> on|off — sources.config.sync_writeback
  *   gbrain sources push [<id>|--path <dir>] — scan-gated add→commit→pull→push
  *                               (agent-bootstrap; core in src/core/workspace-push.ts)
  *
@@ -1146,6 +1147,25 @@ function runDetach(): void {
   console.log(`Detached ${process.cwd()} (removed .gbrain-source).`);
 }
 
+// ── Subcommand: sync-writeback ──────────────────────────────
+
+async function runSyncWriteback(engine: BrainEngine, args: string[]): Promise<void> {
+  const [id, mode] = args;
+  if (!id || (mode !== 'on' && mode !== 'off')) {
+    console.error('Usage: gbrain sources sync-writeback <id> on|off');
+    process.exit(2);
+  }
+  const src = await fetchSource(engine, id);
+  if (!src) {
+    console.error(`Source "${id}" not found.`);
+    process.exit(4);
+  }
+  const config = parseConfig(src.config);
+  config.sync_writeback = mode === 'on';
+  await engine.executeRaw(`UPDATE sources SET config = $1::text::jsonb WHERE id = $2`, [JSON.stringify(normalizeSourceConfig(config)), id]);
+  console.log(`Source "${id}": sync ${mode === 'on' ? 'may rewrite files with canonical frontmatter' : 'indexes files without ever rewriting them'}.`);
+}
+
 // ── Subcommand: federate / unfederate ───────────────────────
 
 async function runFederate(engine: BrainEngine, args: string[], value: boolean): Promise<void> {
@@ -1858,6 +1878,7 @@ export async function runSources(engine: BrainEngine, args: string[]): Promise<v
     case 'detach':     runDetach(); return;
     case 'federate':   return runFederate(engine, rest, true);
     case 'unfederate': return runFederate(engine, rest, false);
+    case 'sync-writeback': return runSyncWriteback(engine, rest);
     case 'archive':    return runArchive(engine, rest);
     case 'restore':    return runRestore(engine, rest);
     case 'purge':      return runPurge(engine, rest);
@@ -1915,6 +1936,7 @@ Subcommands:
                                     when the source has data (pages/chunks/embeddings).
   archive <id>                      Soft-delete: hide from search, preserve data for ${SOFT_DELETE_TTL_HOURS}h.
   restore <id> [--no-federate]      Un-archive a soft-deleted source.
+  sync-writeback <id> on|off        off: sync indexes files but never rewrites them (code repos).
   status [--json]                   v0.40.3.0 — read-only per-source dashboard:
                                     last sync, staleness, page count,
                                     embedding coverage, unacked failures.

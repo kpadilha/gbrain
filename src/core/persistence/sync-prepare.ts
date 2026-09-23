@@ -7,6 +7,7 @@ import { importFromContent, importCodeFile, type ParsedPage } from '../import-fi
 import { parseMarkdown, serializePageToMarkdown, type ParseOpts } from '../markdown.ts';
 import { resolveSlugForPath, slugifyPath, isCodeFilePath } from '../sync.ts';
 import { SOURCE_CONFIG_OBJECT_SQL } from '../source-config-sql.ts';
+import { parseSourceConfig } from '../sources-load.ts';
 import { sameCanonicalImport } from '../page-state/import-guard.ts';
 import { assertPageRevision } from '../page-state/types.ts';
 import { sealPageTextProjection } from '../page-state/projections.ts';
@@ -41,6 +42,11 @@ export function syncFileOverlay(content: string, slug: string, prepared: ParsedP
   const canonical = (page: Pick<ParsedPage, 'type' | 'title' | 'compiled_truth' | 'timeline' | 'frontmatter'>, tags: string[]) => ({ type: page.type, title: page.title, body: page.compiled_truth,
     timeline: page.timeline ?? '', frontmatter: page.frontmatter, tags: [...new Set(tags)].sort() });
   return digest(canonical(parsed, parsed.tags)) !== digest(canonical(prepared, [...pageTags, ...prepared.tags]));
+}
+/** False when the source is a code checkout that sync must index but never rewrite. */
+export async function syncWritesBack(engine: BrainEngine, sourceId: string): Promise<boolean> {
+  const [row] = await engine.executeRaw<{ config: unknown }>('SELECT config FROM sources WHERE id=$1', [sourceId]);
+  return parseSourceConfig(row?.config).sync_writeback !== false;
 }
 export async function prepareManagedSyncMutation(engine: BrainEngine, row: WriteRequest, _config: GBrainConfig): Promise<PreparedMutation> {
   const p = row.intent as SyncIntent | null;
@@ -157,7 +163,7 @@ export async function prepareManagedSyncMutation(engine: BrainEngine, row: Write
   }
   const tags = [...new Set([...(snapshot?.tags ?? []), ...ready.parsedPage.tags])].sort();
   const renderedPage = { ...(snapshot?.page ?? { id: 0, source_id: row.source_id, created_at: new Date(), updated_at: new Date() }), ...ready.parsedPage } as Page;
-  const overlay = syncFileOverlay(p.content, row.slug, ready.parsedPage, snapshot?.tags ?? [], activePack);
+  const overlay = await syncWritesBack(engine, row.source_id) && syncFileOverlay(p.content, row.slug, ready.parsedPage, snapshot?.tags ?? [], activePack);
   if (overlay && p.companyApproval) throw new OperationError('source_writeback_required', 'Canonical preparation requires a source-content correction; this profile never writes repository files.');
   if (overlay && !p.lineEndingOnly && p.rawHash !== sha256(p.content)) throw new OperationError('source_changed', 'Canonical sanitization cannot overwrite newer working-tree bytes.');
   const project = prepareCanonicalProjections(ready.parsedPage, row.slug, row.source_id);
