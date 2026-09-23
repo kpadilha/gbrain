@@ -27,13 +27,14 @@
  * must never skip work permanently.
  */
 
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import type { BrainEngine } from '../engine.ts';
 import { loadConfig } from '../config.ts';
 import { importFromContent } from '../import-file.ts';
 import type { OperationContext } from '../ops/contract.ts';
 import { managedPersistenceEnabled } from '../persistence/ownership.ts';
-import { submitPageMutation } from '../persistence/page-mutations.ts';
+import { requestPrincipalForContext, submitPageMutation } from '../persistence/page-mutations.ts';
+import { getWriteRequest } from '../persistence/journal.ts';
 import { canonicalJson } from '../remediation-step.ts';
 import type { TranscriptAdapter, TranscriptFormat } from './types.ts';
 import { detectAdapter } from './detect.ts';
@@ -152,10 +153,19 @@ function lastMessageTs(messages: Array<{ timestamp: string }>): string {
 
 const RUN_ABORT_MARKER = 'transcripts-ingest run abort';
 
-/** Stable replay ID: a retried scan reuses the same journal receipt. */
-export function transcriptWriteRequestId(kind: string, sourceId: string, slug: string, content = ''): string {
-  const hex = createHash('sha256').update(`v2\0${kind}\0${sourceId}\0${slug}\0${content}`).digest('hex').slice(0, 32);
+/** Replay ID bound to the page revision: a retried scan reuses the receipt, a later change of state never does. */
+export function transcriptWriteRequestId(kind: string, sourceId: string, slug: string, revision: string, content = ''): string {
+  const hex = createHash('sha256').update(`v3\0${kind}\0${sourceId}\0${slug}\0${revision}\0${content}`).digest('hex').slice(0, 32);
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-5${hex.slice(13, 16)}-${((parseInt(hex[16], 16) & 3) | 8).toString(16)}${hex.slice(17, 20)}-${hex.slice(20)}`;
+}
+
+/** A page with no snapshot (never written, or purged) is always a fresh intent, as is a retry after a terminal failure. */
+export async function nextTranscriptRequestId(ctx: OperationContext, kind: string, slug: string, content = ''): Promise<string> {
+  const snapshot = await ctx.engine.readPageSnapshot(slug, { sourceId: ctx.sourceId, includeDeleted: true });
+  if (!snapshot) return randomUUID();
+  const id = transcriptWriteRequestId(kind, ctx.sourceId!, slug, snapshot.revision, content);
+  const prior = await getWriteRequest(ctx.engine, await requestPrincipalForContext(ctx), id);
+  return prior && ['failed', 'conflict', 'cancelled'].includes(prior.state) ? randomUUID() : id;
 }
 
 function transcriptWriteContext(engine: BrainEngine, sourceId: string): OperationContext {
@@ -318,7 +328,7 @@ export async function runTranscriptsIngest(
                       operation: 'put_page',
                       waitMs: 60_000,
                       params: {
-                        request_id: transcriptWriteRequestId('put_page', opts.sourceId, part.slug, part.content),
+                        request_id: await nextTranscriptRequestId(writeCtx, 'put_page', part.slug, part.content),
                         source_id: opts.sourceId,
                         slug: part.slug,
                         content: part.content,
@@ -444,10 +454,11 @@ export async function runTranscriptsIngest(
                     operation: 'delete_page',
                     waitMs: 60_000,
                     params: {
-                      request_id: transcriptWriteRequestId('delete_page', opts.sourceId, row.slug),
+                      request_id: await nextTranscriptRequestId(writeCtx, 'delete_page', row.slug),
                       source_id: opts.sourceId,
                       slug: row.slug,
                       force: true,
+                      database_only: true,
                     },
                   });
                 } else {
