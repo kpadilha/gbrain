@@ -82,8 +82,17 @@ test('gbrain import --database-only writes a managed brain through the coordinat
 
     // A mixed-case frontmatter slug still replays against the stored lower-case revision.
     const alice = (body: string) => writeFileSync(join(staging, 'people-alice.md'), `---\ntitle: Alice\nslug: People-Alice\n---\n\n${body}\n`);
-    for (const body of ['One.', 'Two.', 'One.']) { alice(body); await runImport(engine, [staging, '--no-embed', '--database-only', '--source-id', 'default']); }
-    expect((await engine.getPage('people-alice', { sourceId: 'default' }))?.compiled_truth).toContain('One.');
+    const revisions: string[] = [];
+    for (const body of ['One.', 'Two.', 'One.']) {
+      alice(body);
+      const run = await runImport(engine, [staging, '--no-embed', '--database-only', '--source-id', 'default']);
+      // runImport records per-file failures instead of throwing.
+      expect({ errors: run.errors, failures: run.failures }).toEqual({ errors: 0, failures: [] });
+      const snapshot = await engine.readPageSnapshot('people-alice', { sourceId: 'default' });
+      expect(snapshot?.page.compiled_truth).toContain(body);
+      revisions.push(snapshot!.revision);
+    }
+    expect(new Set(revisions).size).toBe(3);
 
     // The file is the source of truth: emptying it clears the page, as the legacy importer did.
     writeFileSync(join(staging, 'people-alice.md'), '');
