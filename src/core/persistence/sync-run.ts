@@ -12,7 +12,7 @@ import { assertPersistenceAccepting, foregroundWriteCompletions, startPersistenc
 import { assertSyncEntryOrigin, discoverManagedSync, resolveManagedSyncContext, readSyncContent, readSyncFile, syncGit, type SyncDiscovery } from './sync-discovery.ts';
 import { assertSyncPageOrigin, syncOriginPath } from './sync-origin.ts';
 import { assertManagedSyncActive, assertSyncDispatchActive, managedSyncAuthority, validateSyncAuthority, validateManagedSyncOptions, syncProcessingOptions, type SyncAuthority, type SyncProcessingOptions } from './sync-authority.ts';
-import { syncFileOverlay, type SyncIntent } from './sync-prepare.ts';
+import { syncFileOverlay, syncWritesBack, type SyncIntent } from './sync-prepare.ts';
 import { importFromContent } from '../import-file.ts';
 import { isCodeFilePath } from '../sync.ts';
 import { loadActivePackForEngine } from '../schema-pack/engine-resolution.ts';
@@ -187,6 +187,7 @@ async function withoutUnchangedImports(engine: BrainEngine, discovery: SyncDisco
   // Same pack resolution as prepareManagedSyncMutation, or the no-op verdict would judge other bytes.
   const activePack = processing.noSchemaPack ? undefined : (await loadActivePackForEngine(engine, { remote: false, sourceId: discovery.sourceId }).catch(() => null))?.manifest;
   const kept: SyncDiscovery['entries'] = [];
+  const writesBack = await syncWritesBack(engine, discovery.sourceId);
   for (const entry of discovery.entries) {
     if (entry.action !== 'import' || entry.pageId == null || isCodeFilePath(entry.sourcePath)) { kept.push(entry); continue; }
     const snapshot = await engine.readPageSnapshot(entry.slug!, { sourceId: discovery.sourceId, includeDeleted: true });
@@ -198,7 +199,7 @@ async function withoutUnchangedImports(engine: BrainEngine, discovery: SyncDisco
     await importFromContent(engine, entry.slug!, content, { sourceId: discovery.sourceId, noEmbed: true, remote: false, activePack,
       filename: basename(entry.sourcePath).replace(/\.mdx?$/i, ''), sourcePath: entry.sourcePath, allowEmptyOverwrite: true,
       prepare: async value => { prepared = value; return value.result; } });
-    if (!prepared?.noop || prepared.slug !== entry.slug || syncFileOverlay(content, entry.slug!, prepared.parsedPage, snapshot.tags, activePack)) kept.push(entry);
+    if (!prepared?.noop || prepared.slug !== entry.slug || (writesBack && syncFileOverlay(content, entry.slug!, prepared.parsedPage, snapshot.tags, activePack))) kept.push(entry);
   }
   return kept;
 }
