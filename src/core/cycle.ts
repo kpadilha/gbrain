@@ -1686,7 +1686,7 @@ async function runPhasePurge(engine: BrainEngine, dryRun: boolean): Promise<Phas
     // oauth_client, v64) is reported and skipped instead of aborting the sweep.
     const purgeResult = await purgeExpiredSources(engine);
     const purgedSources = purgeResult.purged;
-    const purgedPages = await purgeDeletedPagesCoordinated(engine, SOFT_DELETE_TTL_HOURS_FOR_PURGE); // #5405: coordinated on managed brains
+    const purgedPages = await purgeDeletedPagesCoordinated(engine, SOFT_DELETE_TTL_HOURS_FOR_PURGE, { remote: false }); // #5405: coordinated on managed brains
     const purgedClones = await purgeOrphanClones(SOFT_DELETE_TTL_HOURS_FOR_PURGE);
     // v0.36+ folded scope item +C: GC stale op_checkpoints rows.
     // 7-day TTL is deliberately generous; any reasonable long-running op
