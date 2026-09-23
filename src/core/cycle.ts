@@ -1723,7 +1723,7 @@ async function runPhasePurge(engine: BrainEngine, dryRun: boolean): Promise<Phas
     const purgeResult = await purgeExpiredSources(engine);
     const purgedSources = purgeResult.purged;
     const { purgeExpiredPages } = await import('./persistence/page-mutations.ts');
-    const purgedPages = await purgeExpiredPages(engine, SOFT_DELETE_TTL_HOURS_FOR_PURGE);
+    const purgedPages = await purgeExpiredPages(engine, SOFT_DELETE_TTL_HOURS_FOR_PURGE, { remote: false });
     for (const b of purgedPages.blocked) console.warn(`[cycle.purge] tombstone ${b.source_id}:${b.slug} blocked (${b.code}): ${b.reason}`);
     const purgedClones = await purgeOrphanClones(SOFT_DELETE_TTL_HOURS_FOR_PURGE);
     // v0.36+ folded scope item +C: GC stale op_checkpoints rows.

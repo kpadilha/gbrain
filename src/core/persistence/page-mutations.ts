@@ -18,6 +18,7 @@ import type { Principal } from './model.ts';
 import { normalizeSubagentPageInput } from './page-input.ts';
 import { assertKnowledgePublicationAllowed } from '../shared-skills/knowledge-guard.ts';
 import { WRITER_INSPECTION_HINT } from './admin-intent.ts';
+import { currentSubmissionAuthority } from '../minions/submission-authority.ts';
 
 export async function requestPrincipalForContext(ctx: OperationContext): Promise<Principal> {
   if (ctx.auth?.principal) return { ...ctx.auth.principal };
@@ -91,7 +92,14 @@ export interface PurgeExpiredPagesResult {
  * so each one goes through the coordinator as a trusted local `delete --purge`.
  * Archived sources are left to the source lifecycle purge; per-tombstone refusals come back as blocked.
  */
-export async function purgeExpiredPages(engine: OperationContext['engine'], olderThanHours: number): Promise<PurgeExpiredPagesResult> {
+export async function purgeExpiredPages(engine: OperationContext['engine'], olderThanHours: number,
+  caller: { remote: boolean | undefined }): Promise<PurgeExpiredPagesResult> {
+  // Same trust rule as `delete --purge` (purge-params.ts): stdio agents and remote jobs never purge.
+  const job = currentSubmissionAuthority();
+  if (caller.remote !== false || (job && job.kind !== 'application') || currentVerifiedLocalWriter()?.remote) {
+    throw new OperationError('permission_denied', 'purge is only available to the local CLI.',
+      'Remote callers soft-delete only; run `gbrain pages purge-deleted` on the host.');
+  }
   if (!(await managedPersistenceEnabled(engine))) return { ...await engine.purgeDeletedPages(olderThanHours), blocked: [] };
   const rows = await engine.executeRaw<{ source_id: string; slug: string }>(`SELECT p.source_id, p.slug FROM pages p
     JOIN sources s ON s.id = p.source_id AND s.archived = false
