@@ -4,6 +4,9 @@ import { loadConfig } from '../config.ts';
 import type { OperationContext } from '../ops/contract.ts';
 import { managedPersistenceEnabled } from './ownership.ts';
 import { submitPageMutation } from './page-mutations.ts';
+import { OperationError } from '../ops/contract.ts';
+import { currentSubmissionAuthority } from '../minions/submission-authority.ts';
+import { currentVerifiedLocalWriter } from './identity.ts';
 
 /** A tombstone that moved under a concurrent writer; the next run retries it. */
 const DEFERRAL_CODES = new Set(['revision_conflict', 'page_not_found', 'page_identity_changed']);
@@ -29,7 +32,14 @@ export interface DeletedPagePurge {
  * revision. Pages in archived sources are left to the source-lifecycle purge.
  * A tombstone that cannot be purged is reported, never forced.
  */
-export async function purgeDeletedPagesCoordinated(engine: BrainEngine, olderThanHours: number): Promise<DeletedPagePurge> {
+export async function purgeDeletedPagesCoordinated(engine: BrainEngine, olderThanHours: number,
+  caller: { remote: boolean | undefined }): Promise<DeletedPagePurge> {
+  // Same trust rule as `delete --purge` (purge-params.ts): stdio agents and remote jobs never purge.
+  const job = currentSubmissionAuthority();
+  if (caller.remote !== false || (job && job.kind !== 'application') || currentVerifiedLocalWriter()?.remote) {
+    throw new OperationError('permission_denied', 'purge is only available to the local CLI.',
+      'Remote callers soft-delete only; run `gbrain pages purge-deleted` on the host.');
+  }
   if (!await managedPersistenceEnabled(engine)) {
     const result = await engine.purgeDeletedPages(olderThanHours);
     return { slugs: result.slugs, count: result.count, blocked: [], deferred: 0, failed: 0 };
