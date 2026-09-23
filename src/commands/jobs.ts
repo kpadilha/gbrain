@@ -2927,7 +2927,7 @@ export async function registerBuiltinHandlers(
     let sourcesPurged: string[] = [];
     if (scope === 'pages' || scope === 'all') {
       const { purgeExpiredPages } = await import('../core/persistence/page-mutations.ts');
-      const result = await purgeExpiredPages(engine, olderThanHours);
+      const result = await purgeExpiredPages(engine, olderThanHours, { remote: false });
       pagesPurged = result.count;
       pagesBlocked = result.blocked;
     }
