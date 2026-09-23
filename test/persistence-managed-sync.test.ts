@@ -111,6 +111,37 @@ test('attached working-tree changes require opt-in and delete retains exact phys
   }
 }),120_000);
 
+test('a source with sync_writeback=false indexes bare Markdown without rewriting its checkout', async () => withEnv({ GBRAIN_HOME: home }, async () => {
+  for (const engine of engines) {
+    const bytes = '# Agent guide\n\nRules for working in this code repository.\n';
+    const f = await fixture(engine, { 'AGENTS.md': bytes });
+    await engine.executeRaw(`UPDATE sources SET config='{"sync_writeback":false}'::jsonb WHERE id=$1`, [f.id]);
+    expect((await performManagedSync(engine, {sourceId:f.id,noPull:true})).status).toBe('first_sync');
+    expect(readFileSync(join(f.root,'AGENTS.md'),'utf8')).toBe(bytes);
+    expect((await engine.getPage('agents',{sourceId:f.id}))?.compiled_truth).toContain('Rules for working');
+    // A stored type the path would not infer is what made sanitisation rewrite the file.
+    await engine.executeRaw('UPDATE persistence_brain SET enabled=false WHERE singleton=1');
+    await engine.executeRaw(`UPDATE pages SET type='note' WHERE source_id=$1 AND slug='agents'`, [f.id]);
+    await engine.executeRaw('UPDATE persistence_brain SET enabled=true WHERE singleton=1');
+    const revised = '# Agent guide\n\nRevised rules after a pull.\n';
+    writeFileSync(join(f.root,'AGENTS.md'), revised); commit(f.root, 'pull');
+    expect((await performManagedSync(engine, {sourceId:f.id,noPull:true})).modified).toBe(1);
+    expect(readFileSync(join(f.root,'AGENTS.md'),'utf8')).toBe(revised);
+    expect(git(f.root, 'status', '--porcelain')).toBe('');
+    const dirty = '# Agent guide\n\nAn uncommitted local edit.\n';
+    writeFileSync(join(f.root,'AGENTS.md'), dirty);
+    expect((await performManagedSync(engine,{sourceId:f.id,noPull:true,workingTree:true})).modified).toBe(1);
+    expect(readFileSync(join(f.root,'AGENTS.md'),'utf8')).toBe(dirty);
+    // Page admissions only: upstream working-tree sync still records one cursor checkpoint per run.
+    const ids = async () => (await engine.executeRaw("SELECT id FROM persistence_requests WHERE source_id=$1 AND slug<>'__managed_sync_checkpoint__'",[f.id])).length;
+    const settled = await ids();
+    // #5470: a dirty file is rediscovered every run but takes no second admission.
+    for (let i=0;i<2;i++) expect((await performManagedSync(engine,{sourceId:f.id,noPull:true,workingTree:true})).status).not.toBe('partial');
+    expect(await ids()).toBe(settled);
+    expect(readFileSync(join(f.root,'AGENTS.md'),'utf8')).toBe(dirty);
+  }
+}),120_000);
+
 test('repeated slices reuse one manifest and still reject an intervening page identity change', async () => withEnv({ GBRAIN_HOME: home }, async () => {
   for (const engine of engines) {
     const f = await fixture(engine, {

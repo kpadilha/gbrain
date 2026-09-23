@@ -8,6 +8,7 @@ import { importFromContent, importCodeFile } from '../import-file.ts';
 import { parseMarkdown, serializePageToMarkdown } from '../markdown.ts';
 import { resolveSlugForPath, slugifyPath, isCodeFilePath } from '../sync.ts';
 import { SOURCE_CONFIG_OBJECT_SQL } from '../source-config-sql.ts';
+import { parseSourceConfig } from '../sources-load.ts';
 import { sameCanonicalImport } from '../page-state/import-guard.ts';
 import { assertPageRevision } from '../page-state/types.ts';
 import { sealPageTextProjection } from '../page-state/projections.ts';
@@ -48,6 +49,11 @@ export interface SyncIntent extends Record<string, unknown> {
   overtaken?: boolean;
   syncAuthority: SyncAuthority; cursorKey: string; runId: string; index: number;
   from: string | null; target: string; total: number; slugMode: 'git-root' | 'source-root';
+}
+/** False when the source is a code checkout that sync must index but never rewrite. */
+export async function syncWritesBack(engine: BrainEngine, sourceId: string): Promise<boolean> {
+  const [row] = await engine.executeRaw<{ config: unknown }>('SELECT config FROM sources WHERE id=$1', [sourceId]);
+  return parseSourceConfig(row?.config).sync_writeback !== false;
 }
 export async function prepareManagedSyncMutation(engine: BrainEngine, row: WriteRequest, _config: GBrainConfig): Promise<PreparedMutation> {
   const p = row.intent as SyncIntent | null;
@@ -232,7 +238,7 @@ export async function prepareManagedSyncMutation(engine: BrainEngine, row: Write
     timeline: page.timeline ?? '', frontmatter: page.frontmatter, tags: [...new Set(tags)].sort() });
   // A move re-infers an implicit type from the new location, as a fresh import there would.
   const renamedType = renamed && parsedInput.typeExplicit !== true ? parsedInput.type : undefined;
-  const overlay = digest(canonical(parsed, parsed.tags)) !== digest(canonical({ ...ready.parsedPage, type: renamedType ?? ready.parsedPage.type }, tags));
+  const overlay = await syncWritesBack(engine, row.source_id) && digest(canonical(parsed, parsed.tags)) !== digest(canonical({ ...ready.parsedPage, type: renamedType ?? ready.parsedPage.type }, tags));
   if (overlay && p.companyApproval) throw new OperationError('source_writeback_required', 'Canonical preparation requires a source-content correction; this profile never writes repository files.');
   if (overlay && !p.lineEndingOnly && p.rawHash !== sha256(p.content)) throw new OperationError('source_changed', 'Canonical sanitization cannot overwrite newer working-tree bytes.');
   // A rename projects against the moved page (same id), so its pinned timeline rows carry over.
