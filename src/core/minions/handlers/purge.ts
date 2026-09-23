@@ -16,7 +16,7 @@ export function makePurgeHandler(engine: BrainEngine): MinionHandler {
     let pagesError: string | undefined;
     let sourcesPurged: string[] = [];
     if (scope === 'pages' || scope === 'all') {
-      const result = await (await import('../../persistence/purge-deleted.ts')).purgeDeletedPagesCoordinated(engine, olderThanHours);
+      const result = await (await import('../../persistence/purge-deleted.ts')).purgeDeletedPagesCoordinated(engine, olderThanHours, { remote: false });
       pagesPurged = result.count; pagesBlocked = result.blocked; pagesError = result.error?.message;
     }
     let sourcesBlocked: Array<{ id: string; reason: string }> = [];
