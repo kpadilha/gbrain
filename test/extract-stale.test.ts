@@ -17,7 +17,6 @@ import { describe, test, expect, beforeAll, afterAll, beforeEach } from 'bun:tes
 import { PGLiteEngine } from '../src/core/pglite-engine.ts';
 import { runExtract, extractStaleFromDB } from '../src/commands/extract.ts';
 import { LINK_EXTRACTOR_VERSION_TS } from '../src/core/link-extraction.ts';
-import type { BrainEngine } from '../src/core/engine.ts';
 import type { PageInput } from '../src/core/types.ts';
 
 let engine: PGLiteEngine;
@@ -103,15 +102,18 @@ describe('engine: stale-page extraction methods', () => {
 });
 
 describe('gbrain extract --stale', () => {
-  test('managed brains extract through the coordinated projection writer', async () => {
+  test('managed brains stamp and link without writing the canonical timeline', async () => {
     await engine.putPage('people/alice', personPage('Alice'));
     await engine.putPage('companies/acme', { ...companyPage('Acme', '[Alice](people/alice) advises Acme.'), timeline: '- **2026-01-02** | Founded' });
     await engine.executeRaw('UPDATE persistence_brain SET enabled=true WHERE singleton=1');
     try {
       await runExtract(engine, ['--stale']);
       expect((await engine.getLinks('companies/acme')).some(link => link.to_slug === 'people/alice')).toBe(true);
-      expect((await engine.getTimeline('companies/acme')).length).toBe(1);
       expect(await engine.countStalePagesForExtraction({ versionTs: LINK_EXTRACTOR_VERSION_TS })).toBe(0);
+      // Timeline rows belong to coordinated page publication; extract holds no capability for them.
+      expect(await engine.getTimeline('companies/acme')).toEqual([]);
+      await expect(engine.addTimelineEntriesBatch([{ slug: 'companies/acme', date: '2026-01-02', source: '', summary: 'Founded', detail: '', source_id: 'default' }]))
+        .rejects.toThrow('writer_coordinator_required');
     } finally {
       await engine.executeRaw('UPDATE persistence_brain SET enabled=false WHERE singleton=1');
     }
@@ -349,19 +351,21 @@ describe('gbrain extract --stale', () => {
     // D4 stamps with the READ updated_at (now-3h), so now-1h > now-3h → acme
     // stays stale (edit preserved). The OLD now()-stamp would set
     // links_extracted_at = now > now-1h → acme marked fresh, edit silently lost.
-    const origTransaction = engine.transaction.bind(engine);
+    const origStamp = engine.markPagesExtractedBatch.bind(engine);
     let hooked = false;
-    (engine as unknown as { transaction: unknown }).transaction = async <T>(fn: (tx: BrainEngine) => Promise<T>) => {
+    (engine as unknown as { markPagesExtractedBatch: unknown }).markPagesExtractedBatch = async (
+      refs: Array<{ slug: string; source_id: string; extractedAt?: string }>, def: string,
+    ) => {
       if (!hooked) {
         hooked = true;
         await engine.executeRaw(`UPDATE pages SET updated_at = now() - interval '1 hour' WHERE slug = 'companies/acme'`);
       }
-      return origTransaction(fn);
+      return origStamp(refs, def);
     };
     try {
       await runExtract(engine, ['--stale']);
     } finally {
-      delete (engine as unknown as { transaction?: unknown }).transaction;
+      (engine as unknown as { markPagesExtractedBatch: unknown }).markPagesExtractedBatch = origStamp;
     }
     expect(hooked).toBe(true);
     // acme stays stale (only the concurrently-edited page); alice was stamped
