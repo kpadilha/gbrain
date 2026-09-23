@@ -9,6 +9,8 @@ import { slugifyPath } from '../core/sync.ts';
 import { getDefaultSourcePath } from '../core/source-resolver.ts';
 import type { PageType } from '../core/types.ts';
 
+const EXPORT_LISTING_LIMIT = 100000;
+
 export async function runExport(engine: BrainEngine, args: string[]) {
   const dirIdx = args.indexOf('--dir');
   const outDir = dirIdx !== -1 ? args[dirIdx + 1] : './export';
@@ -81,7 +83,7 @@ export async function runExport(engine: BrainEngine, args: string[]) {
   
   // Build filters. slugPrefix is engine-side (Issue #13) — no in-memory
   // post-filter, no full-table load.
-  const filters: import('../core/types.ts').PageFilters = { limit: 100000 };
+  const filters: import('../core/types.ts').PageFilters = { limit: EXPORT_LISTING_LIMIT };
   if (typeFilter) filters.type = typeFilter;
   if (slugPrefix) filters.slugPrefix = slugPrefix;
 
@@ -115,6 +117,11 @@ export async function runExport(engine: BrainEngine, args: string[]) {
     }
   } else {
     pages = await engine.listPages(filters);
+  }
+  // A listing that filled the cap may be truncated; pruning past it would delete live pages' files.
+  if (prune && pages.length >= EXPORT_LISTING_LIMIT) {
+    console.error(`Error: --prune refused — the page listing reached its ${EXPORT_LISTING_LIMIT}-page cap, so it may be incomplete.`);
+    process.exit(1);
   }
   if (restoreOnly) {
     console.log(`Restoring ${pages.length} db_only pages to ${outDir}/`);

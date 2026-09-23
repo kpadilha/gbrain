@@ -9,7 +9,7 @@
  * removed, and only the two shapes export itself produces are candidates.
  */
 
-import { describe, test, expect, beforeAll, afterAll } from 'bun:test';
+import { describe, test, expect, beforeAll, afterAll, spyOn } from 'bun:test';
 import { mkdtempSync, existsSync, writeFileSync, mkdirSync, rmSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
@@ -73,3 +73,18 @@ describe('export --prune keeps the mirror faithful to the brain', () => {
     expect(existsSync(join(outDir, 'README.txt'))).toBe(true);
   });
 });
+
+test('refuses to prune when the page listing may be truncated', async () => {
+  const listPages = engine.listPages.bind(engine);
+  const fake = { slug: 'notes/fake', type: 'note', title: 'x', compiled_truth: '', timeline: '', frontmatter: {} };
+  (engine as unknown as { listPages: unknown }).listPages = async (f: { limit: number }) => Array.from({ length: f.limit }, () => fake);
+  const exit = spyOn(process, 'exit').mockImplementation(((code: number) => { throw new Error(`exit ${code}`); }) as never);
+  try {
+    await expect(runExport(engine, ['--dir', outDir, '--prune'])).rejects.toThrow('exit 1');
+    expect(existsSync(join(outDir, KEPT + '.md'))).toBe(true);
+    expect(existsSync(join(outDir, 'notes', 'fake.md'))).toBe(false);
+  } finally {
+    exit.mockRestore();
+    (engine as unknown as { listPages: unknown }).listPages = listPages;
+  }
+}, 60000);
