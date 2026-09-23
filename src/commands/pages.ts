@@ -69,7 +69,7 @@ async function runPurgeDeleted(engine: BrainEngine, args: string[]): Promise<voi
   const authorized = await consentGate(purgeConsentRequest(preview.count, olderThanHours, json, args), { json });
   if (!authorized) return;
 
-  const result = await purgeDeletedPagesCoordinated(engine, olderThanHours);
+  const result = await purgeDeletedPagesCoordinated(engine, olderThanHours, { remote: false });
   if (json) {
     console.log(JSON.stringify({ older_than_hours: olderThanHours, count: result.count, slugs: result.slugs,
       ...(result.blocked.length ? { blocked: result.blocked } : {}) }, null, 2));

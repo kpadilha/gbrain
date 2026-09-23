@@ -216,7 +216,7 @@ test('#5405: a tombstone restored and deleted again after the purge scan is not 
       }
       return engine.readPageSnapshot(slug, opts);
     };
-    const result = await purgeDeletedPagesCoordinated(racing, 72);
+    const result = await purgeDeletedPagesCoordinated(racing, 72, { remote: false });
     expect(result).toMatchObject({ count: 0, failed: 0, deferred: 1 });
     expect((await engine.readPageSnapshot('notes/cycled', { sourceId, includeDeleted: true }))?.page.deleted_at).toBeTruthy();
   });
