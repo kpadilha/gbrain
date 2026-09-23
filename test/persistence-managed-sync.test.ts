@@ -127,6 +127,34 @@ test('an unchanged working tree is not re-admitted, so rescans spend no permanen
   }
 }),120_000);
 
+test('a source with sync_writeback=false indexes bare Markdown without rewriting its checkout', async () => withEnv({ GBRAIN_HOME: home }, async () => {
+  for (const engine of engines) {
+    const bytes = '# Agent guide\n\nRules for working in this code repository.\n';
+    const f = await fixture(engine, { 'AGENTS.md': bytes });
+    await engine.executeRaw(`UPDATE sources SET config='{"sync_writeback":false}'::jsonb WHERE id=$1`, [f.id]);
+    expect((await performManagedSync(engine, {sourceId:f.id,noPull:true})).status).toBe('first_sync');
+    expect(readFileSync(join(f.root,'AGENTS.md'),'utf8')).toBe(bytes);
+    expect((await engine.getPage('agents',{sourceId:f.id}))?.compiled_truth).toContain('Rules for working');
+    // A stored type the path would not infer is what made sanitisation rewrite the file.
+    await engine.executeRaw('UPDATE persistence_brain SET enabled=false WHERE singleton=1');
+    await engine.executeRaw(`UPDATE pages SET type='note' WHERE source_id=$1 AND slug='agents'`, [f.id]);
+    await engine.executeRaw('UPDATE persistence_brain SET enabled=true WHERE singleton=1');
+    const revised = '# Agent guide\n\nRevised rules after a pull.\n';
+    writeFileSync(join(f.root,'AGENTS.md'), revised); commit(f.root, 'pull');
+    expect((await performManagedSync(engine, {sourceId:f.id,noPull:true})).modified).toBe(1);
+    expect(readFileSync(join(f.root,'AGENTS.md'),'utf8')).toBe(revised);
+    expect(git(f.root, 'status', '--porcelain')).toBe('');
+    const dirty = '# Agent guide\n\nAn uncommitted local edit.\n';
+    writeFileSync(join(f.root,'AGENTS.md'), dirty);
+    expect((await performManagedSync(engine,{sourceId:f.id,noPull:true,workingTree:true})).modified).toBe(1);
+    expect(readFileSync(join(f.root,'AGENTS.md'),'utf8')).toBe(dirty);
+    const ids = async () => (await engine.executeRaw('SELECT id FROM persistence_requests WHERE source_id=$1',[f.id])).length;
+    const settled = await ids();
+    for (let i=0;i<2;i++) expect((await performManagedSync(engine,{sourceId:f.id,noPull:true,workingTree:true})).status).toBe('up_to_date');
+    expect(await ids()).toBe(settled);
+  }
+}),120_000);
+
 test('repeated slices reuse one manifest and still reject an intervening page identity change', async () => withEnv({ GBRAIN_HOME: home }, async () => {
   for (const engine of engines) {
     const f = await fixture(engine, {
