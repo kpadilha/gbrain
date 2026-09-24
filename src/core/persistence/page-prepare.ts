@@ -71,6 +71,14 @@ function putProvenance(row: WriteRequest, snapshot: PageSnapshot | null, parsed:
 function isNeverFiledDerivedPage(slug: string, page: { source_path?: string | null; source_uri?: string | null }): boolean {
   return !page.source_path && !page.source_uri && DERIVE_PHASE_DB_ONLY_DEFAULTS.some(prefix => slug.startsWith(prefix));
 }
+/** Where a page's canonical file lives under its source root. */
+export async function canonicalFilePath(engine: BrainEngine, sourceId: string, root: string, snapshot: PageSnapshot | null, slug: string,
+  capture?: { path: string }): Promise<string> {
+  const capturedPath = !snapshot && capture ? capture.path : recordedPathFromFileUri(snapshot?.page.source_uri, root);
+  const mode = snapshot?.page.source_path ? await scannerSlugRootMode(engine, sourceId, root) : undefined;
+  return nativeFileTarget(root, resolveSourceLocalFilePath(root, snapshot?.page.source_path, slug, mode)
+    ?? (capturedPath ? join(root, capturedPath) : join(root, `${slug}.md`)));
+}
 export async function prepareFileTarget(engine: BrainEngine, row: Pick<WriteRequest, 'source_id' | 'worktree_id' | 'slug'>, snapshot: PageSnapshot | null,
   content: string | null, hostId?: string, options: { allowMissing?: boolean; capture?: { path: string; hash: string } } = {}): Promise<PreparedMutation['file']> {
   if (!row.worktree_id) return undefined;
@@ -82,10 +90,7 @@ export async function prepareFileTarget(engine: BrainEngine, row: Pick<WriteRequ
   if (!binding?.local_path) throw new OperationError('owner_unavailable', 'The canonical worktree is unavailable on this host.');
   const root = join(binding.local_path, binding.relative_path);
   // #5622: a new page captured from a file inside the source is published to that file.
-  const capturedPath = !snapshot && options.capture ? options.capture.path : recordedPathFromFileUri(snapshot?.page.source_uri, root);
-  const mode = snapshot?.page.source_path ? await scannerSlugRootMode(engine, row.source_id, root) : undefined;
-  const path = nativeFileTarget(root, resolveSourceLocalFilePath(root, snapshot?.page.source_path, row.slug, mode)
-    ?? (capturedPath ? join(root, capturedPath) : join(root, `${row.slug}.md`)));
+  const path = await canonicalFilePath(engine, row.source_id, root, snapshot, row.slug, options.capture);
   if (!isWriteTargetContained(path, root)) throw new OperationError('source_changed', 'The canonical file target is outside its registered source.');
   const before = existsSync(path) ? readFileSync(path) : null;
   if (!before && snapshot && !snapshot.page.deleted_at && !options.allowMissing) {
