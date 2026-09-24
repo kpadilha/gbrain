@@ -50,8 +50,9 @@ export function localWriteContext(engine: OperationContext['engine'], sourceId: 
  * Replay ID for a machine re-import: identical bytes over the same page revision
  * replay the retained receipt, so an unchanged rescan admits no new request.
  */
+// v2: the intent moved from force to expected_revision, so v1 ids already accepted by older code must not collide.
 export function importWriteRequestId(sourceId: string, slug: string, content: string, revision: string | null): string {
-  return derivedRequestId(`import-v1\0${sourceId}\0${slug}\0${revision ?? ''}\0${content}`);
+  return derivedRequestId(`import-v2\0${sourceId}\0${slug}\0${revision ?? ''}\0${content}`);
 }
 function derivedRequestId(material: string): string {
   const hex = createHash('sha256').update(material).digest('hex').slice(0, 32);

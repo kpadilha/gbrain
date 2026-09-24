@@ -7,7 +7,8 @@ import { activatePersistence } from '../src/core/persistence/activation.ts';
 import { claimWorktree } from '../src/core/persistence/ownership.ts';
 import { disposePersistenceConsumer } from '../src/core/persistence/service.ts';
 import { runImport } from '../src/commands/import.ts';
-import { localWriteContext, submitPageMutation } from '../src/core/persistence/page-mutations.ts';
+import { importWriteRequestId, localWriteContext, submitPageMutation } from '../src/core/persistence/page-mutations.ts';
+import { createHash } from 'node:crypto';
 import { importManagedDatabaseOnly } from '../src/core/persistence/import-mutations.ts';
 import { withSubmissionAuthority } from '../src/core/minions/submission-authority.ts';
 import { withEnv } from './helpers/with-env.ts';
@@ -120,3 +121,15 @@ test('database-only import keeps every managed import guard', async () => {
     expect(await requests("operation='put_page' AND slug IN ('guarded','foreign')")).toBe(0);
   });
 }, 120_000);
+
+test('database-only import ids never collide with v1 ids accepted by older code', () => {
+  // Older code accepted v1 ids with a force intent; reusing them with expected_revision is a conflict.
+  const v1 = (material: string) => {
+    const hex = createHash('sha256').update(material).digest('hex').slice(0, 32);
+    return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-5${hex.slice(13, 16)}-${((parseInt(hex[16], 16) & 3) | 8).toString(16)}${hex.slice(17, 20)}-${hex.slice(20)}`;
+  };
+  const args = ['default', 'people-alice', 'Body.\n', 'rev-1'] as const;
+  const [source, slug, content, revision] = args;
+  expect(importWriteRequestId(...args)).not.toBe(v1(`import-v1\0${source}\0${slug}\0${revision}\0${content}`));
+  expect(importWriteRequestId(...args)).toBe(importWriteRequestId(...args));
+});
