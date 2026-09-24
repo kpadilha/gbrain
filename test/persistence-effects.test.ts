@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, expect, test } from 'bun:test';
 import { randomUUID } from 'node:crypto';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PGLiteEngine } from '../src/core/pglite-engine.ts';
@@ -144,6 +144,28 @@ test('missing withdrawal files materialize and advance mirror and Git scans with
   const [git] = await engine.executeRaw<{ data: { after_slug: string }; error_code: string | null }>("SELECT data,error_code FROM persistence_effects WHERE request_id=$1::uuid AND kind='git'", [row.id]);
   expect(git.data.after_slug).toBe('page'); expect(git.error_code).toBeNull(); expect(existsSync(f.file)).toBe(false);
   expect((await getWriteRequestById(engine, row.id))!.state).toBe('committed');
+});
+
+test('mirror and Git scans pass sync metafile pages without touching their files', async () => {
+  const f = await fixture(body());
+  // index.md is a sync metafile (SYNC_SKIP_FILES): sync never imports it and another process owns its bytes.
+  await engine.putPage('index', page(body()), { sourceId: f.sourceId });
+  const indexFile = join(f.root, 'index.md');
+  writeFileSync(indexFile, '# Index\n\nMaintained outside the brain.\n');
+  utimesSync(indexFile, new Date('2026-01-01T00:00:00Z'), new Date('2026-01-01T00:00:00Z'));
+  const before = { bytes: readFileSync(indexFile), mtime: statSync(indexFile).mtimeMs };
+  const row = await withdraw(f); await onlyEffects(row.id);
+  await engine.executeRaw("UPDATE persistence_effects SET next_attempt_at=now()+interval '1 hour' WHERE request_id=$1::uuid AND kind<>'withdrawal-mirror'", [row.id]);
+  await runPersistenceEffects(engine, config, { hostId, limit: 4 });
+  const [mirror] = await engine.executeRaw<{ state: string; error_code: string | null }>("SELECT state,error_code FROM persistence_effects WHERE request_id=$1::uuid AND kind='withdrawal-mirror'", [row.id]);
+  expect(mirror).toEqual({ state: 'committed', error_code: null });
+  expect(parseFactsFence(readFileSync(f.file, 'utf8')).facts.filter(fact => fact.active)).toHaveLength(0);
+  await engine.executeRaw("UPDATE persistence_effects SET next_attempt_at=now() WHERE request_id=$1::uuid AND kind='git'", [row.id]);
+  await runPersistenceEffects(engine, config, { hostId, limit: 1 });
+  const [git] = await engine.executeRaw<{ data: { after_slug?: string }; error_code: string | null }>("SELECT data,error_code FROM persistence_effects WHERE request_id=$1::uuid AND kind='git'", [row.id]);
+  expect(git.error_code).toBeNull(); expect(git.data.after_slug).toBe('index');
+  expect(readFileSync(indexFile).equals(before.bytes)).toBe(true);
+  expect(statSync(indexFile).mtimeMs).toBe(before.mtime);
 });
 
 test('configured recovery capacity refuses file mutation without undoing withdrawal', async () => {

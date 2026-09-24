@@ -21,7 +21,8 @@ import { quoteIdentifier } from '../search/embedding-column.ts';
 import { acquireWorktree, getWorktreeBinding, type WorktreeBinding } from './ownership.ts';
 import { persistenceFileHash, transientDatabaseFailure } from './coordinator.ts';
 import { sha256 } from './digest.ts';
-import { prepareFileTarget } from './page-prepare.ts';
+import { canonicalFilePath, prepareFileTarget } from './page-prepare.ts';
+import { unsyncableReason } from '../sync.ts';
 import { advanceEffectCursor, claimPersistenceEffect, completeEffect, failEffect, renewPersistenceEffectClaim, retryEffect } from './effect-journal.ts';
 import { guardEffectSource, recoverEffectPublication, reserveEffectRecovery } from './effect-recovery.ts';
 import { publishGitEffect } from './effect-git.ts';
@@ -68,10 +69,19 @@ async function materializeAndAdvance(engine: BrainEngine, effect: PersistenceEff
   });
 }
 
+/** Sync never imports its metafiles (index.md, log.md, …); a scan must not claim their bytes either. */
+async function isSyncMetafilePage(engine: BrainEngine, effect: PersistenceEffect, snapshot: PageSnapshot, hostId: string): Promise<boolean> {
+  const binding = effect.worktree_id ? await getWorktreeBinding(engine, effect.source_id, hostId) : null;
+  if (!binding?.local_path) return false;
+  const root = join(binding.local_path, binding.relative_path);
+  return unsyncableReason(relative(root, canonicalFilePath(root, snapshot, snapshot.page.slug)).split(sep).join('/')) === 'metafile';
+}
+
 async function mirrorPage(engine: BrainEngine, effect: PersistenceEffect, binding: WorktreeBinding | null, opts: EffectWorkerOptions): Promise<void> {
   const snapshot = await selectedEffectPage(engine, effect);
   if (!snapshot) { await completeEffect(engine, effect); return; }
   if (snapshot.sourceIncarnation !== effect.source_incarnation) throw new OperationError('source_changed', 'The mirror source was replaced.');
+  if (await isSyncMetafilePage(engine, effect, snapshot, opts.hostId)) { await materializeAndAdvance(engine, effect, snapshot, opts.hostId); return; }
   const content = serializePageToMarkdown(snapshot.page, snapshot.tags);
   const file = binding?.local_path ? await prepareFileTarget(engine, { ...effect, slug: snapshot.page.slug }, snapshot, content, opts.hostId, { allowMissing: true }) : undefined;
   if (!file || snapshot.page.deleted_at || !existsSync(file.path)) {
@@ -95,6 +105,7 @@ async function gitPage(engine: BrainEngine, effect: PersistenceEffect, binding: 
   let path: string;
   if (effect.data.source_scan) {
     if (!snapshot) { await completeEffect(engine, effect); return; }
+    if (await isSyncMetafilePage(engine, effect, snapshot, opts.hostId)) { await materializeAndAdvance(engine, effect, snapshot, opts.hostId); return; }
     const file = await prepareFileTarget(engine, { ...effect, slug: snapshot.page.slug }, snapshot,
       snapshot.page.deleted_at ? null : serializePageToMarkdown(snapshot.page, snapshot.tags), opts.hostId, { allowMissing: true });
     if (!file) throw new OperationError('source_changed', 'The Git binding changed.');
