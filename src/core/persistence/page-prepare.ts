@@ -61,15 +61,19 @@ function putProvenance(row: WriteRequest, snapshot: PageSnapshot | null, parsed:
   Object.assign(parsed.frontmatter, stamp);
   return stamp;
 }
+/** Where a page's canonical file lives under its source root. */
+export function canonicalFilePath(root: string, snapshot: PageSnapshot | null, slug: string): string {
+  const capturedPath = recordedPathFromFileUri(snapshot?.page.source_uri, root);
+  return nativeFileTarget(root, resolveSourceLocalFilePath(root, snapshot?.page.source_path, slug)
+    ?? (capturedPath ? join(root, capturedPath) : join(root, `${slug}.md`)));
+}
 export async function prepareFileTarget(engine: BrainEngine, row: Pick<WriteRequest, 'source_id' | 'worktree_id' | 'slug'>, snapshot: PageSnapshot | null,
   content: string | null, hostId?: string, options: { allowMissing?: boolean } = {}): Promise<PreparedMutation['file']> {
   if (!row.worktree_id) return undefined;
   const binding = await getWorktreeBinding(engine, row.source_id, hostId);
   if (!binding?.local_path) throw new OperationError('owner_unavailable', 'The canonical worktree is unavailable on this host.');
   const root = join(binding.local_path, binding.relative_path);
-  const capturedPath = recordedPathFromFileUri(snapshot?.page.source_uri, root);
-  const path = nativeFileTarget(root, resolveSourceLocalFilePath(root, snapshot?.page.source_path, row.slug)
-    ?? (capturedPath ? join(root, capturedPath) : join(root, `${row.slug}.md`)));
+  const path = canonicalFilePath(root, snapshot, row.slug);
   if (!isWriteTargetContained(path, root)) throw new OperationError('source_changed', 'The canonical file target is outside its registered source.');
   const before = existsSync(path) ? readFileSync(path) : null;
   if (!before && snapshot && !snapshot.page.deleted_at && !options.allowMissing) {
