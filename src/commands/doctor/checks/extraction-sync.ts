@@ -8,6 +8,7 @@ import { join } from 'path';
 import { existsSync, readdirSync } from 'fs';
 import type { BrainEngine } from '../../../core/engine.ts';
 import { probeSourceGitState } from '../../../core/git-head.ts';
+import { isDetachedHead } from '../../../core/sync-git.ts';
 // v0.41.32.0: remote staleness reads the stored newest_content_at column via
 // this pure comparator (no git subprocess on the HTTP MCP doctor path).
 import { lagFromContentMs, loadSyncFreshnessSources, resolveStalenessCeilingSeconds } from '../../../core/source-health.ts';
@@ -1275,6 +1276,18 @@ export async function checkSyncFreshness(
     let upstream_unknown_count = 0, upstream_behind_count = 0;
     const staleIds: string[] = [];
     const stoppedConnectors = await stoppedConnectorIssues(engine, sources, now - failMs).catch(() => new Map());
+    // Sync's "does it import the working tree?" posture is a GLOBAL config key
+    // (sync/preflight.ts:859 and the managed twin at
+    // src/core/persistence/sync-discovery.ts:194 both read
+    // `sync.include_working_tree`), so resolve it once per report like the
+    // ceiling above. Fail-open: a stub or pre-config engine keeps the
+    // commit-driven default, which is what sync does on an unset key.
+    let includeWorkingTree = false;
+    try {
+      includeWorkingTree = (await engine.getConfig('sync.include_working_tree')) === 'true';
+    } catch {
+      /* commit-driven default */
+    }
     for (const source of sources) {
       if (ownedContent.has(source.id)) { writer_owned_count++; continue; }
       if (catalogPacks.ids.has(source.id)) { read_only_pack_count++; continue; }
@@ -1385,12 +1398,35 @@ export async function checkSyncFreshness(
       // masked (D7): it disables the fallback too.
       let cloneUnavailable = false;
       if (localOnly) {
+        // Sync's up-to-date predicate is HEAD === last_commit, and only when
+        // the run IMPORTS the working tree does an uncommitted change also
+        // count as work — see `importWorkingTree` at sync/preflight.ts:862 and its
+        // managed-lane twin at persistence/sync-discovery.ts:194 (both:
+        // detached HEAD, or `sync.include_working_tree`). A tracked-but-
+        // uncommitted change on a commit-driven source is NOT work; sync
+        // reports it as `uncommitted` drift and still returns up_to_date.
+        // Demanding a clean tree unconditionally was the same false-SEVERE
+        // class v0.41.32.0 fixed for untracked dirs: ` M .env` or
+        // ` M .claude/session-handoff.md` on a quiet source read as "brain
+        // search is stale" while `gbrain sync` said up_to_date.
+        const importsWorkingTree = includeWorkingTree
+          || (source.local_path !== null && isDetachedHead(source.local_path));
         const gitState = probeSourceGitState(
           source.local_path,
           source.last_commit,
-          { requireCleanWorkingTree: 'ignore-untracked' },
+          importsWorkingTree ? { requireCleanWorkingTree: 'ignore-untracked' } : undefined,
         );
-        const chunkerMatch = source.chunker_version === currentChunkerVersion;
+        // NULL = the column was never stamped. Only the LEGACY sync lane
+        // writes `sources.chunker_version` (writeChunkerVersion, sync/full.ts:163,
+        // sync/finalize.ts:70/294); a source synced through managed persistence re-chunks
+        // through its own pipeline and keeps NULL forever. Requiring equality
+        // therefore flagged every post-persistence source stale on every run.
+        // Sync's own gate is mismatch-shaped — sync/preflight.ts:841
+        // `storedVersion !== null && storedVersion !== current` — so mirror
+        // that: NULL carries no recorded mismatch, while a recorded version
+        // that differs still disables the short-circuit below.
+        const chunkerMatch =
+          source.chunker_version === null || source.chunker_version === currentChunkerVersion;
         if (gitState === 'unchanged' && chunkerMatch) {
           unchanged_count++;
           continue;
