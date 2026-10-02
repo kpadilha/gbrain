@@ -2,8 +2,8 @@
   "golden": {
     "exitCode": 0,
     "stderr": "",
-    "stdoutBytes": 200378,
-    "stdoutSha256": "c23df35de49ce6ca01006bf4db2ce92fb57d2f37f089f82fef292c047982b00e",
+    "stdoutBytes": 201522,
+    "stdoutSha256": "f0446db156616bf9a0c7c007dba588c273437311d87fb934515e0ecc18b52bc2",
     "toolNames": [
       "remember",
       "entity",
@@ -164,21 +164,33 @@
         "description": "MEMORY VERB (v1): save one fact to durable agent memory — the protocol write verb. provenance is REQUIRED (free text, e.g. \"conversation 2026-06-12\", \"user said in chat\", \"import: notes.md\"). Set `entity` whenever the fact is about a specific person/company/project — entity-scoped recall will not find it otherwise. ttl accepts duration shorthand (\"30d\", \"12h\") or an absolute ISO 8601 timestamp; ISO-8601 durations like \"P30D\" are rejected with a fix. visibility defaults to \"world\" (readable by every agent connected to this brain; pass \"private\" for local-CLI-only facts). Response: branch on `status` (inserted|duplicate|superseded), never on `status_text` (human rendering only). On duplicate, `id` is the EXISTING fact's id. For bulk extraction from a raw transcript use extract_facts instead.",
         "name": "remember",
         "parameters": {
+          "context": "string?",
           "entity": "string?",
+          "event_type": "string?",
           "expected_revision": "string?",
           "fact": "string",
           "force": "boolean?",
           "kind": "string?",
+          "observed_at": "string?",
           "provenance": "string",
           "request_id": "string?",
+          "session_id": "string?",
           "source_id": "string?",
           "ttl": "string?",
           "visibility": "string?"
         },
         "schema": {
           "properties": {
+            "context": {
+              "description": "Optional pointer context string (e.g. \"commit abc123\" or compact JSON). Max 2048 UTF-8 bytes.",
+              "type": "string"
+            },
             "entity": {
               "description": "Person/company/project this fact is about (name or slug; canonicalized server-side). Set it whenever the fact has a subject — entity-scoped recall misses unattributed facts.",
+              "type": "string"
+            },
+            "event_type": {
+              "description": "Optional event-shaped marker (max 128 chars), e.g. \"file_edit\", \"commit\", \"test_run\". Persisted on the fact; recall(kind:\"event\") selects rows that carry one.",
               "type": "string"
             },
             "expected_revision": {
@@ -204,12 +216,20 @@
               ],
               "type": "string"
             },
+            "observed_at": {
+              "description": "Optional ISO 8601 date or datetime of when the event actually happened — becomes the fact's valid_from (event time, used by since-windowed recall). Defaults to now.",
+              "type": "string"
+            },
             "provenance": {
               "description": "Where this fact came from (REQUIRED, free text, max 500 chars). Examples: \"conversation 2026-06-12\", \"user said in chat\", \"import: meeting-notes.md\".",
               "type": "string"
             },
             "request_id": {
               "description": "Optional caller-generated UUID for this write. Reuse the same UUID and original arguments to recover its outcome after a timeout; a different intent requires a new UUID.",
+              "type": "string"
+            },
+            "session_id": {
+              "description": "Optional source session id (max 128 chars) persisted on the fact as source_session — the capture session that produced this memory (e.g. topic-id from MCP _meta.session_id, or a CLI session label). recall(session_id) filters on it.",
               "type": "string"
             },
             "source_id": {
