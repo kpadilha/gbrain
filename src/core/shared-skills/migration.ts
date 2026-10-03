@@ -9,7 +9,7 @@ import { checkedContentRoot, inventorySkillpack, sameInventory, type PackInvento
 import { contentSetupKey, installPackagedSharedSkills, setupSharedBrainContent, type SharedContentReceipt } from './setup.ts';
 import type { DatabaseContentExportReceipt } from './migration-export.ts';
 import { inspectSharedMemberMigration, type SharedMemberMigration } from './migration-members.ts';
-import { sharedSkillSourcePolicyOrPreserve } from './setup-source-policy.ts';
+import { sharedSkillSourcePolicyOrPreserve, WRITEBACK_DISABLED } from './setup-source-policy.ts';
 import { INVENTORY_LIMIT_CEILINGS, readInventoryLimits, type InventoryLimits } from './inventory-limits.ts';
 import { SHARED_SKILL_LIMITS } from './model.ts';
 
@@ -130,6 +130,11 @@ export async function runSharedSkillsMigration(ctx: OperationContext, options: {
       row.stages.push({ stage, status: row.status, reason });
       await persist();
     };
+    if (sourcePolicy.mode === 'preserve_files' && sourcePolicy.reason.startsWith(WRITEBACK_DISABLED)) {
+      row.stages.push({ stage: 'projection', status: 'complete', reason: sourcePolicy.reason });
+      await persist();
+      continue;
+    }
     if (sourcePolicy.mode === 'preserve_files') {
       row.member_installations = await inspectSharedMemberMigration(ctx.engine, source.id, source.incarnation);
       await pending('projection', sourcePolicy.reason);
