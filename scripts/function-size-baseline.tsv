@@ -10,7 +10,7 @@ src/commands/bootstrap.ts	runHooks	597	seed: W5 baseline, refactor wave 1 (decom
 src/commands/bootstrap.ts	runHooks>withLock(#1)	449	seed: W5 baseline, refactor wave 1 (decomposition deferred to wave 2, plan D1)
 src/commands/config.ts	runConfig	765	seed: W5 baseline, refactor wave 1 (decomposition deferred to wave 2, plan D1)
 src/commands/doctor/bootstrap-checks.ts	bootstrapDoctorChecks	476	seed: W5 baseline, refactor wave 1 (decomposition deferred to wave 2, plan D1)
-src/commands/doctor/checks/extraction-sync.ts	checkSyncFreshness	333	seed: W5 baseline, refactor wave 1 (decomposition deferred to wave 2, plan D1)
+src/commands/doctor/checks/extraction-sync.ts	checkSyncFreshness	341	TODO: local-jina port: commit-driven working-tree + NULL chunker_version freshness gate (+8)
 src/commands/doctor/report-remote.ts	doctorReportRemote	416	seed: W5 baseline, refactor wave 1 (decomposition deferred to wave 2, plan D1)
 src/commands/dream-retriage.ts	runDreamRetriage	524	seed: W5 baseline, refactor wave 1 (decomposition deferred to wave 2, plan D1)
 src/commands/embed.ts	embedAllStale	560	seed: W5 baseline, refactor wave 1 (decomposition deferred to wave 2, plan D1); +9 #5804: a null projection snapshot is a counted failure (archived sources left to reportArchived) with one end-of-run batch summary
@@ -62,7 +62,7 @@ src/core/skillopt/orchestrator.ts	runOptimizationLoop	704	seed: W5 baseline, ref
 src/core/skillopt/orchestrator.ts	runOptimizationLoop>withBudgetTracker(#1)	405	seed: W5 baseline, refactor wave 1 (decomposition deferred to wave 2, plan D1)
 src/core/sources-ops.ts	addSource	317	seed: W5 baseline, refactor wave 1 (decomposition deferred to wave 2, plan D1)
 src/core/think/index.ts	runThink	450	seed: W5 baseline, refactor wave 1 (decomposition deferred to wave 2, plan D1)
-src/core/transcripts/ingest.ts	runTranscriptsIngest	317	seed: W5 baseline, refactor wave 1 (decomposition deferred to wave 2, plan D1)
+src/core/transcripts/ingest.ts	runTranscriptsIngest	351	TODO: local-jina port: transcript ingest through managed writer + bounded Hermes scans (+34)
 src/core/workspace-push.ts	workspacePush	312	seed: W5 baseline, refactor wave 1 (decomposition deferred to wave 2, plan D1)
 src/mcp/dispatch.ts	dispatchToolCall	325	seed: W5 baseline, refactor wave 1 (decomposition deferred to wave 2, plan D1); +3 eval wave N5-1: hot-memory invalidation after mutating ops (success and failure paths)
 src/mcp/http-transport.ts	startHttpTransport	408	seed: W5 baseline, refactor wave 1 (decomposition deferred to wave 2, plan D1)
