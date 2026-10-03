@@ -3,6 +3,9 @@ import { getCompanyBrainProfile } from '../company-brain/profile.ts';
 import { parseSourceConfig } from '../sources-load.ts';
 import { OperationError } from '../ops/contract.ts';
 
+/** Reason prefix for a read-only mirror source (#5409); nothing is pending for it. */
+export const WRITEBACK_DISABLED = 'source_writeback_disabled';
+
 export type SharedSkillSourcePolicy =
   | { mode: 'content'; reason?: never }
   | { mode: 'explicit_pack_required' | 'preserve_files'; reason: string };
@@ -14,6 +17,9 @@ export async function sharedSkillSourcePolicy(engine: BrainEngine, sourceId: str
   const [source] = await engine.executeRaw<{ config: unknown }>('SELECT config FROM sources WHERE id=$1 AND NOT archived', [sourceId]);
   if (!source) throw new OperationError('source_changed', 'The selected content source is missing or archived.');
   const config = parseSourceConfig(source.config);
+  // The coordinator's mirror guard exempts skill bundles, so the policy keeps them out of a mirror checkout.
+  if (config.mirror_read_only === true) return { mode: 'preserve_files',
+    reason: `${WRITEBACK_DISABLED}: this source is a read-only mirror (mirror_read_only). Shared skills are not installed into it.` };
   if (config.kind != null) return { mode: 'preserve_files',
     reason: 'source_skill_adoption_required: this connector-managed source is not a shared-skill write target. Preserve its generated/imported files and put approved shared skills in a separate content source.' };
   if (config.remote_url != null || config.managed_clone === true) return { mode: 'explicit_pack_required',
