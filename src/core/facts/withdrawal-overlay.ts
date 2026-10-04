@@ -3,6 +3,7 @@ import { FACTS_FENCE_BEGIN, FACTS_FENCE_END, parseFactsFence, renderFactsTable, 
 import type { PageWithdrawal } from '../page-state/types.ts';
 import { OperationError } from '../ops/contract.ts';
 import { normalizeLoweredClaim } from './withdrawal-schema.ts';
+import { redactStoredText } from '../secret-scan.ts';
 
 export const WITHDRAWAL_MARKER_LIMIT = 16_384;
 
@@ -118,7 +119,8 @@ export function overlayWithdrawalBody(body: string, normalizedBody: string, with
   for (let i = blocks.length - 1; i >= 0; i--) {
     const block = blocks[i], norm = normalized[i];
     if (!norm || block.parsed.warnings.length || norm.parsed.warnings.length) continue;
-    const claims = new Map(norm.parsed.facts.map(f => [f.rowNum, f.claim]));
+    // Ledger hashes are taken over the stored, redacted claim (a user-authored fence keeps its raw bytes).
+    const claims = new Map(norm.parsed.facts.map(f => [f.rowNum, redactStoredText(f.claim)]));
     let changed = false;
     const facts = block.parsed.facts.map(f => {
       const claim = claims.get(f.rowNum);
