@@ -40,6 +40,7 @@
 
 import type { NewFact, FactKind, FactVisibility } from '../engine.ts';
 import type { ParsedFact } from '../facts-fence.ts';
+import { redactFactText } from '../secret-scan.ts';
 
 /**
  * Fence-extracted fact row. Structural superset of `NewFact` with the
@@ -273,6 +274,7 @@ export function extractFactsFromFenceText(
       claim_unit:   f.claimUnit ?? null,
       claim_period: f.claimPeriod ?? null,
     };
-    return row;
+    // A user-authored fence keeps its bytes on disk; only the derived row is redacted.
+    return redactFactText(row);
   });
 }

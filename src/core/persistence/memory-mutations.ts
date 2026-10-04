@@ -20,6 +20,7 @@ import { withCoordinatedWrite } from './context.ts';
 import { isTerminal, type WriteRequest } from './model.ts';
 import { prepareMemoryMutation } from './memory-prepare.ts';
 import { retryWriteAdmission } from './admission-retry.ts';
+import { redactStoredText } from '../secret-scan.ts';
 
 export { prepareMemoryMutation } from './memory-prepare.ts';
 /** Only semantic appends without an explicit caller revision can be recomputed. */
@@ -163,6 +164,8 @@ interface WithdrawalTarget { id: number; entity_slug: string | null; source_mark
 
 /** Withdrawal commits independently of filesystem ownership and request FIFO. */
 export async function submitForgetMutation(ctx: OperationContext, operation: 'forget' | 'forget_fact', params: Record<string, unknown>): Promise<Record<string, unknown>> {
+  // Both forget verbs route here; redact before the journaled intent and facts.context persist reason.
+  if (typeof params.reason === 'string') params = { ...params, reason: redactStoredText(params.reason) };
   const sub = await submission(ctx, operation, params);
   if (sub.prior) return writeResponse(sub.prior);
   const { p, sourceId, principal, callerIntent, requestId } = sub;

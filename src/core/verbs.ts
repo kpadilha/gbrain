@@ -139,7 +139,9 @@ const remember: Operation = {
   annotations: { title: 'remember (memory write)', idempotentHint: true },
   handler: async (ctx, p) => {
     const { verbError, parseTtlParam } = await import('./operations.ts');
-    const fact = typeof p.fact === 'string' ? p.fact.trim() : '';
+    // The shared fact layers redact rows and fences; this also keeps the journaled intent and dedup clean.
+    const { redactStoredText: redact } = await import('./secret-scan.ts');
+    const fact = typeof p.fact === 'string' ? redact(p.fact.trim()) : '';
     if (!fact) {
       throw verbError(
         'invalid_params',
@@ -147,7 +149,7 @@ const remember: Operation = {
         'Pass the claim to remember, e.g. fact: "picked Stripe over Adyen — onboarding speed".',
       );
     }
-    const provenance = typeof p.provenance === 'string' ? p.provenance.trim() : '';
+    const provenance = typeof p.provenance === 'string' ? redact(p.provenance.trim()) : '';
     if (!provenance) {
       throw verbError(
         'provenance_required',
@@ -226,7 +228,7 @@ const remember: Operation = {
           'Pass a pointer string, e.g. context: "commit abc123" or compact JSON text.',
         );
       }
-      context = p.context;
+      context = redact(p.context);
       const bytes = Buffer.byteLength(context, 'utf8');
       if (bytes > CONTEXT_MAX_BYTES) {
         throw verbError(
