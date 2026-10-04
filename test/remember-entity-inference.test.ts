@@ -18,6 +18,7 @@ import { registerLocalWriter } from '../src/core/persistence/identity.ts';
 import { configureGateway, resetGateway, __setEmbedTransportForTests } from '../src/core/ai/gateway.ts';
 import { LEGACY_EMBEDDING_CONFIG } from './helpers/legacy-embedding-config.ts';
 import { formatRememberResult } from '../src/cli/remember-format.ts';
+import { writeFactsToFence } from '../src/core/facts/fence-write.ts';
 
 let engine: PGLiteEngine;
 const sourceId = 'remember-inference-test';
@@ -70,6 +71,62 @@ describe('remember entity inference (#5836)', () => {
     const cell = (await fenceRows('companies/acme-example')).find(f => f.claim === 'Acme Example raised a seed round');
     expect(cell?.context).toBe('entity inferred from mention');
     expect(formatRememberResult(r)).toContain('entity: companies/acme-example (inferred from mention)');
+  });
+
+  test('secret-shaped fact text, provenance and context are redacted in the row and fence; benign text is kept', async () => {
+    // Synthetic, assembled at runtime so no literal token sits in the repo.
+    const fake = ['ghp', '_', 'Zq7Xw2Lp9Rt4Vb8Nk3Hs6Jd1Fg5Mc0Ya2UeKx'].join('');
+    const r = await remember({ entity: 'people/alice-example', fact: `Alice Example rotated ${fake} today`,
+      provenance: `chat with ${fake}`, context: `commit abc123 token=${fake}` });
+    expect(r.status).toBe('inserted');
+    const [row] = await engine.executeRaw<{ fact: string; source: string; context: string }>(
+      'SELECT fact,source,context FROM facts WHERE id=$1', [Number(r.id)]);
+    const page = (await engine.readPageSnapshot('people/alice-example', { sourceId }))!.page.compiled_truth;
+    for (const stored of [row!.fact, row!.source, row!.context, page]) expect(stored).not.toContain(fake);
+    expect(row!.fact).toMatch(/^Alice Example rotated <REDACTED:[^>]+> today$/);
+    expect(row!.context).toMatch(/^commit abc123 token=<REDACTED:[^>]+>$/);
+    const cell = (await fenceRows('people/alice-example')).find(f => f.claim === row!.fact);
+    expect(cell?.context).toBe(row!.context);
+    const benign = await remember({ entity: 'people/alice-example', fact: 'Alice Example prefers tea', context: 'commit def456' });
+    expect((await factRow(benign.id)).context).toBe('commit def456');
+    await operationsByName.forget!.handler(context(), { id: benign.id, reason: `leaked ${fake}` });
+    const forgotten = (await factRow(benign.id)).context!;
+    expect(forgotten).not.toContain(fake);
+    expect(forgotten).toMatch(/^commit def456 \| forgotten: leaked <REDACTED:[^>]+>$/);
+  });
+
+  test('managed fence writes (extract_facts lane) redact fact, source and context in the row and fence', async () => {
+    const fake = ['ghp', '_', 'Mk4Rt8Wq2Zp6Xn1Lb5Vc9Hd3Js7Fg0Ya4UeQo'].join('');
+    const res = await writeFactsToFence(engine, { sourceId, localPath: null, slug: 'companies/acme-example', resolutionSource: 'exact_page' } as never, [
+      { fact: `Acme Example deploy key is ${fake}`, kind: 'fact', source: `extract ${fake}`, context: `ctx ${fake}`,
+        visibility: 'world', notability: 'medium', embedding: null, sessionId: null }]);
+    expect(res.inserted).toBe(1);
+    const [row] = await engine.executeRaw<{ fact: string; source: string; context: string }>(
+      'SELECT fact,source,context FROM facts WHERE id=$1', [res.ids[0]]);
+    const page = (await engine.readPageSnapshot('companies/acme-example', { sourceId }))!.page.compiled_truth;
+    for (const stored of [row!.fact, row!.source, row!.context, page]) expect(stored).not.toContain(fake);
+    expect(row!.fact).toMatch(/^Acme Example deploy key is <REDACTED:[^>]+>$/);
+    const journal = await engine.executeRaw<{ intent: unknown }>(`SELECT intent FROM persistence_requests WHERE operation='extract_facts'`);
+    expect(JSON.stringify(journal)).not.toContain(fake);
+  });
+
+  test('an imported user-authored fence keeps its bytes while the derived fact rows are redacted', async () => {
+    const fake = ['ghp', '_', 'Pz3Kw7Rn1Xq5Lm9Vb2Hc6Jd0Fs4Gt8Ya1UeWi'].join('');
+    const content = `---\ntitle: Erin Example\ntype: person\n---\n# Erin Example\n\n## Facts\n\n<!--- gbrain:facts:begin -->
+| # | claim | kind | confidence | visibility | notability | valid_from | valid_until | source | context |
+|---|-------|------|------------|------------|------------|------------|-------------|--------|---------|
+| 1 | Erin Example token ${fake} | fact | 1.0 | world | medium | 2026-09-01 |  | import ${fake} | note ${fake} |
+| 2 | Erin Example likes tea | fact | 1.0 | world | medium | 2026-09-01 |  | fixture | plain |
+<!--- gbrain:facts:end -->
+`;
+    await operationsByName.put_page!.handler(context(), { slug: 'people/erin-example', content });
+    const rows = await engine.executeRaw<{ fact: string; source: string; context: string; row_num: number }>(
+      `SELECT fact,source,context,row_num FROM facts WHERE source_id=$1 AND source_markdown_slug='people/erin-example' ORDER BY row_num`, [sourceId]);
+    expect(rows.map(r => r.row_num)).toEqual([1, 2]);
+    for (const v of [rows[0]!.fact, rows[0]!.source, rows[0]!.context]) { expect(v).not.toContain(fake); expect(v).toContain('<REDACTED:'); }
+    expect([rows[1]!.fact, rows[1]!.source, rows[1]!.context]).toEqual(['Erin Example likes tea', 'fixture', 'plain']);
+    // The canonical body is the user's file: it keeps the secret so file and DB page do not drift.
+    expect((await engine.readPageSnapshot('people/erin-example', { sourceId }))!.page.compiled_truth).toContain(fake);
   });
 
   test('an unattributed save warns NO_ENTITY with a hint naming the entity field', async () => {
