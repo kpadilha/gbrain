@@ -1,5 +1,6 @@
 import { tryAcquirePoolLongHold, PoolCapacityError } from './pool-budget.ts';
 import { noteRequestConfigWrite, requestConfigRows, requestConfigValue } from './config-snapshot.ts';
+import { redactStoredText } from './secret-scan.ts';
 import { replaceDerivedLinks, replaceDerivedLinksBatch, type DerivedLinkBatchItem, type DerivedLinkOrigin, type DerivedLinkReplacementOptions } from './derived-links.ts';
 import { mutatePageTag } from './page-state/tags.ts';
 import type { PageKey, PageSnapshot, PageSnapshotOptions, PageWriteOptions } from './page-state/types.ts';
@@ -1871,6 +1872,8 @@ export class PostgresEngine implements BrainEngine {
   }
 
   async mergeOntologyFact(obs: OntologyObservationInput): Promise<OntologyMergeResult> {
+    // ontology_propose takes caller strings; redact before value_hash so dedup keys stay deterministic.
+    obs = { ...obs, value: redactStoredText(obs.value), source: redactStoredText(obs.source) };
     const sql = this.sql;
     const sourceId = obs.sourceId ?? 'default';
     const dimension = normalizeDimension(obs.dimension);

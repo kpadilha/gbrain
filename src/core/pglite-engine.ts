@@ -1,6 +1,7 @@
 import { registerManagedFilesystemEngine } from './persistence/filesystem-guard.ts';
 import { writerStamp } from './persistence/writer-versions.ts';
 import { noteRequestConfigWrite, requestConfigRows, requestConfigValue } from './config-snapshot.ts';
+import { redactStoredText } from './secret-scan.ts';
 import { replaceDerivedLinks, replaceDerivedLinksBatch, type DerivedLinkBatchItem, type DerivedLinkOrigin, type DerivedLinkReplacementOptions } from './derived-links.ts';
 import { trackPgliteDatabase, PgliteClosingError, notifyPgliteOpened } from './pglite-lifecycle.ts';
 import { mutatePageTag } from './page-state/tags.ts';
@@ -2108,6 +2109,8 @@ export class PGLiteEngine implements BrainEngine {
   }
 
   async mergeOntologyFact(obs: OntologyObservationInput): Promise<OntologyMergeResult> {
+    // ontology_propose takes caller strings; redact before value_hash so dedup keys stay deterministic.
+    obs = { ...obs, value: redactStoredText(obs.value), source: redactStoredText(obs.source) };
     const sourceId = obs.sourceId ?? 'default';
     const dimension = normalizeDimension(obs.dimension);
     const vh = valueHash(obs.value);
