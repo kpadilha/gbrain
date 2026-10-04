@@ -2,8 +2,8 @@
   "golden": {
     "exitCode": 0,
     "stderr": "",
-    "stdoutBytes": 172704,
-    "stdoutSha256": "7ee701f796d78f4f08a35b3b15b6b88bc483d5288b303a5ba365a62d62068c8b",
+    "stdoutBytes": 173121,
+    "stdoutSha256": "bd0102656d69eed3333ac26b344b8f0b6406bc8f228620bacbb56d8712aca8aa",
     "toolNames": [
       "remember",
       "entity",
@@ -166,22 +166,32 @@
         "description": "MEMORY VERB (v1): save one fact; provenance required. Set `entity` when the fact has a subject, or entity-scoped recall misses it. Branch on `status` (inserted|duplicate|superseded). write_pending carries a receipt: poll get_write_request.",
         "name": "remember",
         "parameters": {
+          "context": "string?",
           "entity": "string?",
+          "event_type": "string?",
           "expected_revision": "string?",
           "fact": "string",
           "force": "boolean?",
           "infer_entity": "boolean?",
           "kind": "string?",
+          "observed_at": "string?",
           "provenance": "string",
           "request_id": "string?",
+          "session_id": "string?",
           "source_id": "string?",
           "ttl": "string?",
           "visibility": "string?"
         },
         "schema": {
           "properties": {
+            "context": {
+              "type": "string"
+            },
             "entity": {
               "description": "Who or what it is about (name or slug).",
+              "type": "string"
+            },
+            "event_type": {
               "type": "string"
             },
             "expected_revision": {
@@ -211,12 +221,19 @@
               ],
               "type": "string"
             },
+            "observed_at": {
+              "description": "ISO 8601 event time.",
+              "type": "string"
+            },
             "provenance": {
               "description": "Where the fact came from (max 500 chars).",
               "type": "string"
             },
             "request_id": {
               "description": "UUID; retry with it on timeout.",
+              "type": "string"
+            },
+            "session_id": {
               "type": "string"
             },
             "source_id": {
