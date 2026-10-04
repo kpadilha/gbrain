@@ -110,6 +110,19 @@ describe('remember entity inference (#5836)', () => {
     expect(JSON.stringify(journal)).not.toContain(fake);
   });
 
+  test('ontology_propose redacts value and source, and a repeat stays a deterministic no-op', async () => {
+    const fake = ['ghp', '_', 'Tn5Qw9Lr3Xk7Zm1Vb6Hc2Jd8Fs0Gy4Ya3UeRa'].join('');
+    const propose = () => operationsByName.ontology_propose!.handler(context(),
+      { entity: 'people/alice-example', dimension: 'role', value: `admin ${fake}`, source: `chat ${fake}` }) as Promise<Record<string, any>>;
+    const first = await propose();
+    expect(first.factId).toBeGreaterThan(0);
+    const [row] = await engine.executeRaw<{ fact: string; value: string; source: string; source_markdown_slug: string }>(
+      'SELECT fact,value,source,source_markdown_slug FROM facts WHERE id=$1', [first.factId]);
+    for (const stored of Object.values(row!)) expect(stored).not.toContain(fake);
+    expect(row!.fact).toMatch(/^role: admin <REDACTED:[^>]+>$/);
+    expect((await propose()).action).toBe('noop');
+  });
+
   test('an imported user-authored fence keeps its bytes while the derived fact rows are redacted', async () => {
     const fake = ['ghp', '_', 'Pz3Kw7Rn1Xq5Lm9Vb2Hc6Jd0Fs4Gt8Ya1UeWi'].join('');
     const content = `---\ntitle: Erin Example\ntype: person\n---\n# Erin Example\n\n## Facts\n\n<!--- gbrain:facts:begin -->
