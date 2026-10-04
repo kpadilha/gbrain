@@ -1447,3 +1447,15 @@ export function redactFindings(
   const plan = planRedaction(text, opts);
   return { text: applyRedaction(plan), redactions: plan.redactions, echoValues: plan.echoValues };
 }
+
+/** Write-time redaction for persisted memory text, with the transcript options; idempotent. */
+export function redactStoredText(text: string): string {
+  return redactFindings(text, { highEntropy: true }).text;
+}
+
+/** Redacts a fact's free-text columns (fact, source, context); structured fields pass through. */
+export function redactFactText<T extends { fact: string; source?: string | null; context?: string | null }>(f: T): T {
+  return { ...f, fact: redactStoredText(f.fact),
+    ...(typeof f.source === 'string' ? { source: redactStoredText(f.source) } : {}),
+    ...(typeof f.context === 'string' ? { context: redactStoredText(f.context) } : {}) };
+}

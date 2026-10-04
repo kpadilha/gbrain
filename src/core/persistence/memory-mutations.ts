@@ -30,6 +30,7 @@ import { prepareMemoryMutation } from './memory-prepare.ts';
 import { retryWriteAdmission } from './admission-retry.ts';
 import { privateProvenanceFilterFragment, resolveExcludePrivatePages } from '../search/private-visibility.ts';
 import { markBeliefCommits } from '../belief/append.ts';
+import { redactStoredText } from '../secret-scan.ts';
 
 export { prepareMemoryMutation } from './memory-prepare.ts';
 /** Only semantic appends without an explicit caller revision can be recomputed. */
@@ -241,6 +242,8 @@ async function refuseForgetReachingOtherCopies(tx: BrainEngine, sourceId: string
 
 /** Withdrawal commits independently of filesystem ownership and request FIFO. */
 export async function submitForgetMutation(ctx: OperationContext, operation: 'forget' | 'forget_fact', params: Record<string, unknown>): Promise<Record<string, unknown>> {
+  // Both forget verbs route here; redact before the journaled intent and facts.context persist reason.
+  if (typeof params.reason === 'string') params = { ...params, reason: redactStoredText(params.reason) };
   const sub = await submission(ctx, operation, params);
   if (sub.prior) return withSimilarActive(ctx, operation, sub.sourceId, sub.p, writeResponse(sub.prior));
   const { p, sourceId, principal, callerIntent, requestId, clientRequestId } = sub;

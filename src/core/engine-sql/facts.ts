@@ -31,6 +31,7 @@ import { projectionEligibleSql } from '../eligibility/sql.ts';
 import { privateProvenanceFilterFragment } from '../search/private-visibility.ts';
 import { storedTrustTier } from '../trust/tier.ts';
 import { ensureWellFormed } from '../text-safe.ts';
+import { redactFactText } from '../secret-scan.ts';
 
 export type EmbeddingCast = '::vector' | '::halfvec';
 
@@ -70,6 +71,7 @@ export async function insertFact(
     input: NewFact,
     ctx: { source_id: string; supersedeId?: number },
   ): Promise<{ id: number; status: FactInsertStatus }> {
+    input = redactFactText(input);
     const validFrom = input.valid_from ?? new Date();
     const validUntil = input.valid_until ?? null;
     const kind = input.kind ?? 'fact';
@@ -238,6 +240,7 @@ export async function insertFacts(
     opts?: { deleteForPageFirst?: { slug: string; excludeSourcePrefixes?: string[]; preserveExpiredLegacy?: boolean } },
   ): Promise<{ inserted: number; ids: number[]; warnings: string[]; deleted: number }> {
     if (rows.length === 0) return { inserted: 0, ids: [], warnings: [], deleted: 0 };
+    rows = rows.map(redactFactText);
 
     // v0.41.15.0 (T6, codex #20): resolve the embedding-cast suffix
     // ONCE per process so the cast matches the actual column type
