@@ -2,8 +2,8 @@
   "golden": {
     "exitCode": 0,
     "stderr": "",
-    "stdoutBytes": 204870,
-    "stdoutSha256": "87248fb10a23b5d78ed0ba90f26502697a22858793ac38cf8af9b499a05bafc5",
+    "stdoutBytes": 205287,
+    "stdoutSha256": "f7400de364bd0d6342fe23cca43726a87360d7ce8a0fc9842047367a4d45bfae",
     "toolNames": [
       "remember",
       "entity",
@@ -173,15 +173,19 @@
         "mutating": true,
         "name": "remember",
         "parameters": {
+          "context": "string?",
           "entity": "string?",
+          "event_type": "string?",
           "expected_revision": "string?",
           "fact": "string",
           "force": "boolean?",
           "infer_entity": "boolean?",
           "kind": "string?",
+          "observed_at": "string?",
           "provenance": "string",
           "replaces": "string?",
           "request_id": "string?",
+          "session_id": "string?",
           "source_id": "string?",
           "ttl": "string?",
           "visibility": "string?"
@@ -189,8 +193,14 @@
         "required_scopes": [],
         "schema": {
           "properties": {
+            "context": {
+              "type": "string"
+            },
             "entity": {
               "description": "Who or what it is about (name or slug).",
+              "type": "string"
+            },
+            "event_type": {
               "type": "string"
             },
             "expected_revision": {
@@ -220,6 +230,10 @@
               ],
               "type": "string"
             },
+            "observed_at": {
+              "description": "ISO 8601 event time.",
+              "type": "string"
+            },
             "provenance": {
               "description": "Where the fact came from (max 500 chars).",
               "type": "string"
@@ -230,6 +244,9 @@
             },
             "request_id": {
               "description": "UUID; retry with it on timeout.",
+              "type": "string"
+            },
+            "session_id": {
               "type": "string"
             },
             "source_id": {
