@@ -235,12 +235,15 @@ export function worktreeManifest(root: string, opts: { progress?: ProgressOption
 }
 
 /**
- * Paths git ignores under a git root, relative to it; whole ignored directories end in '/'.
- * Build output is not canonical content. A non-git root ignores nothing.
+ * Paths git ignores under a work-tree root, relative to it; ignored directories end in '/'.
+ * A root that is not itself a git top level ignores nothing, as before.
  */
 function gitIgnoredPaths(root: string): Set<string> {
-  try { discoverGitRoot(root); } catch { return new Set(); }
-  return new Set(gitRawOutput(root, ['ls-files', '-z', '--others', '--ignored', '--exclude-standard', '--directory']).split('\0'));
+  try { if (realpathSync(discoverGitRoot(root)) !== root) return new Set(); } catch { return new Set(); }
+  // Ignored paths (.env, build output) are not canonical content, matching git's view; the
+  // per-user global excludesFile is dropped so every host derives the same set.
+  return new Set(gitRawOutput(root, ['ls-files', '-z', '--others', '--ignored', '--exclude-standard', '--directory'],
+    ['core.excludesFile=/dev/null', 'core.fsmonitor=false', 'core.untrackedCache=false']).split('\0'));
 }
 
 /** Human-mode progress for manifest hashing; JSON and quiet modes report nothing. */

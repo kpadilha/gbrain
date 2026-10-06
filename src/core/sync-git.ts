@@ -322,8 +322,8 @@ export function git(
  * review — the misread let a decoy blob stand in for the real file and a
  * live page was deleted on the corrupted evidence).
  */
-export function gitRawOutput(repoPath: string, args: string[]): string {
-  return execFileSync('git', buildGitInvocation(repoPath, args, []), {
+export function gitRawOutput(repoPath: string, args: string[], configs: string[] = []): string {
+  return execFileSync('git', buildGitInvocation(repoPath, args, configs), {
     encoding: 'utf-8',
     timeout: 30000,
     maxBuffer: 100 * 1024 * 1024,

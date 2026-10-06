@@ -99,4 +99,27 @@ describe('worktree manifest and git-ignored paths', () => {
     symlinkSync('../x', join(root, 'node_modules', '.bin', 'x'));
     expect(unsafe(root)).toBe('writer_manifest_unsafe');
   }));
+
+  test('a subdirectory of a repo whose .gitignore covers its node_modules keeps the strict walk', () => withRepo(true, parent => {
+    const child = join(parent, 'sub');
+    mkdirSync(join(child, 'node_modules', '.bin'), { recursive: true });
+    symlinkSync('../x', join(child, 'node_modules', '.bin', 'x'));
+    expect(unsafe(child)).toBe('writer_manifest_unsafe');
+  }));
+
+  test('a per-user global excludes file does not change the manifest', () => withRepo(true, root => {
+    const global = join(root, '..', `${root.split(sep).pop()}-global`), saved = process.env.GIT_CONFIG_GLOBAL;
+    writeFileSync(`${global}.ignore`, 'extra/\n');
+    writeFileSync(`${global}.config`, `[core]\n\texcludesFile = ${global}.ignore\n`);
+    mkdirSync(join(root, 'extra'));
+    symlinkSync('../a.md', join(root, 'extra', 'link'));
+    process.env.GIT_CONFIG_GLOBAL = `${global}.config`;
+    try {
+      expect(execFileSync('git', ['-C', root, 'check-ignore', 'extra/link'], { encoding: 'utf8' }).trim()).toBe('extra/link');
+      expect(unsafe(root)).toBe('writer_manifest_unsafe');
+    } finally {
+      if (saved === undefined) delete process.env.GIT_CONFIG_GLOBAL; else process.env.GIT_CONFIG_GLOBAL = saved;
+      rmSync(`${global}.ignore`, { force: true }); rmSync(`${global}.config`, { force: true });
+    }
+  }));
 });
