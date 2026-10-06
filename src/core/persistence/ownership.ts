@@ -5,7 +5,7 @@ import type { BrainEngine } from '../engine.ts';
 import { OperationError, opError } from '../ops/contract.ts';
 import { readFix } from '../ops/op-fix.ts';
 import type { Action } from '../agent-output.ts';
-import { discoverGitRoot } from '../sync-git.ts';
+import { discoverGitRoot, gitRawOutput } from '../sync-git.ts';
 import { cliOptsToProgressOptions, getCliOptions } from '../cli-options.ts';
 import { createProgress, type ProgressOptions } from '../progress.ts';
 import { digest, sha256 } from './digest.ts';
@@ -208,13 +208,16 @@ export const MANIFEST_PROGRESS_MIN_FILES = 5000;
  */
 export function worktreeManifest(root: string, opts: { progress?: ProgressOptions } = {}): WorktreeManifest {
   const canonical = realpathSync(root);
+  const ignored = gitIgnoredPaths(canonical);
   const paths: string[] = [];
   const visit = (dir: string) => {
     for (const name of readdirSync(dir).sort()) {
       if (name === '.git' || name === '.gbrain-managed' || isPhysicalRootMetadata(name)) continue;
-      const path = join(dir, name), info = lstatSync(path);
+      const path = join(dir, name), rel = relative(canonical, path).split(sep).join('/');
+      if (ignored.has(rel) || ignored.has(`${rel}/`)) continue;
+      const info = lstatSync(path);
       if (info.isSymbolicLink()) throw opError('writer_manifest_unsafe', 'Canonical worktree transfer requires a symlink-free manifest.',
-        `${relative(canonical, path).split(sep).join('/')} in the checkout is a symlink, so no manifest was recorded. Ask the user to replace it with a real file or directory (or remove it), then run the transfer step again.`);
+        `${rel} in the checkout is a symlink, so no manifest was recorded. Ask the user to replace it with a real file or directory (or remove it), then run the transfer step again.`);
       if (info.isDirectory()) visit(path);
       else if (info.isFile()) paths.push(path);
     }
@@ -229,6 +232,15 @@ export function worktreeManifest(root: string, opts: { progress?: ProgressOption
   }
   progress?.finish();
   return { digest: digest(files), file_count: paths.length };
+}
+
+/**
+ * Paths git ignores under a git root, relative to it; whole ignored directories end in '/'.
+ * Build output is not canonical content. A non-git root ignores nothing.
+ */
+function gitIgnoredPaths(root: string): Set<string> {
+  try { discoverGitRoot(root); } catch { return new Set(); }
+  return new Set(gitRawOutput(root, ['ls-files', '-z', '--others', '--ignored', '--exclude-standard', '--directory']).split('\0'));
 }
 
 /** Human-mode progress for manifest hashing; JSON and quiet modes report nothing. */

@@ -1,6 +1,7 @@
 /** #5790 / DX-O10: manifest hashing progress and digest compatibility. */
 import { afterEach, describe, expect, test } from 'bun:test';
-import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join, relative, sep } from 'node:path';
 import { tmpdir } from 'node:os';
 import { PassThrough } from 'node:stream';
@@ -61,4 +62,41 @@ describe('worktree manifest hashing', () => {
     expect(compactStoredManifest(legacy)).toEqual({ digest: 'd'.repeat(64), file_count: 2, canonical_stamp: 'stamp', self_transfer: { hostId: 'h' } });
     expect(compactStoredManifest({ digest: 'd'.repeat(64), file_count: 7 })).toEqual({ digest: 'd'.repeat(64), file_count: 7 });
   });
+});
+
+describe('worktree manifest and git-ignored paths', () => {
+  const unsafe = (root: string) => { try { worktreeManifest(root); return null; } catch (error) { return (error as { code?: string }).code; } };
+  function withRepo<T>(git: boolean, run: (root: string) => T): T {
+    const root = mkdtempSync(join(tmpdir(), 'gbrain-manifest-ignore-'));
+    try {
+      if (git) execFileSync('git', ['init', '-q', root]);
+      writeFileSync(join(root, '.gitignore'), 'node_modules/\n');
+      writeFileSync(join(root, 'a.md'), 'a');
+      mkdirSync(join(root, 'node_modules', '.bin'), { recursive: true });
+      writeFileSync(join(root, 'node_modules', 'x'), 'x');
+      return run(root);
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  }
+
+  test('a git-ignored symlink is skipped with its whole ignored directory', () => withRepo(true, root => {
+    symlinkSync('../x', join(root, 'node_modules', '.bin', 'x'));
+    expect(worktreeManifest(root)).toEqual({ digest: digest({ '.gitignore': sha256('node_modules/\n'), 'a.md': sha256('a') }), file_count: 2 });
+  }));
+
+  test('a tracked symlink is still refused', () => withRepo(true, root => {
+    symlinkSync('a.md', join(root, 'link'));
+    execFileSync('git', ['-C', root, 'add', 'link']);
+    expect(unsafe(root)).toBe('writer_manifest_unsafe');
+  }));
+
+  test('an untracked symlink git does not ignore is still refused', () => withRepo(true, root => {
+    symlinkSync('a.md', join(root, 'link'));
+    expect(unsafe(root)).toBe('writer_manifest_unsafe');
+  }));
+
+  test('a non-git root still walks ignored-looking paths and refuses their symlinks', () => withRepo(false, root => {
+    expect(worktreeManifest(root).file_count).toBe(3);
+    symlinkSync('../x', join(root, 'node_modules', '.bin', 'x'));
+    expect(unsafe(root)).toBe('writer_manifest_unsafe');
+  }));
 });
