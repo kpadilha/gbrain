@@ -1,3 +1,4 @@
+import { redactStoredText } from '../secret-scan.ts';
 import type { BrainEngine, FactAttribution, FactRow } from '../engine.ts';
 import { verbError } from '../ops/contract.ts';
 import { isAvailable, embedOne, getEmbeddingModel } from '../ai/gateway.ts';
@@ -19,7 +20,7 @@ export async function prepareFactEmbedding(fact: string, signal?: AbortSignal, d
   if (!disabled && isAvailable('embedding')) {
     try {
       const model = getEmbeddingModel();
-      return { embedding: await embedOne(fact, { abortSignal: signal, embeddingModel: model, inputType: 'document' }), embedding_model: model, degraded: false };
+      return { embedding: await embedOne(redactStoredText(fact), { abortSignal: signal, embeddingModel: model, inputType: 'document' }), embedding_model: model, degraded: false };
     } catch { signal?.throwIfAborted(); }
   }
   return { embedding: null, embedding_model: null, degraded: true };
