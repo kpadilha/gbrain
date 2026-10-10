@@ -10,7 +10,7 @@ src/commands/bootstrap.ts	runHooks	600	seed: W5 baseline, refactor wave 1 (decom
 src/commands/bootstrap.ts	runHooks>withLock(#1)	449	seed: W5 baseline, refactor wave 1 (decomposition deferred to wave 2, plan D1)
 src/commands/config.ts	runConfig	775	seed: W5 baseline, refactor wave 1 (decomposition deferred to wave 2, plan D1); +2 #5232: persistence.write_wait_ms dispatch line (logic in setFileWriteWait); wave 10 collector: master and the #4907/#5958 config-set range refusals compose at 775
 src/commands/doctor/bootstrap-checks.ts	bootstrapDoctorChecks	476	seed: W5 baseline, refactor wave 1 (decomposition deferred to wave 2, plan D1)
-src/commands/doctor/checks/extraction-sync.ts	checkSyncFreshness	350	TODO: local-jina port: commit-driven working-tree + NULL chunker_version freshness gate (+17)
+src/commands/doctor/checks/extraction-sync.ts	checkSyncFreshness	352	TODO: local-jina port: commit-driven working-tree + NULL chunker_version freshness gate (+17); managed sync ignores the chunker stamp (+2)
 src/commands/doctor/report-remote.ts	doctorReportRemote	416	seed: W5 baseline, refactor wave 1 (decomposition deferred to wave 2, plan D1)
 src/commands/dream-retriage.ts	runDreamRetriage	524	seed: W5 baseline, refactor wave 1 (decomposition deferred to wave 2, plan D1)
 src/commands/embed.ts	embedAllStale	566	seed: W5 baseline, refactor wave 1 (decomposition deferred to wave 2, plan D1); +9 #5804: a null projection snapshot is a counted failure (archived sources left to reportArchived) with one end-of-run batch summary; +4 wave 8 lane D1 #5527: subtract current-model chunks from the mixed-space warning; +2 Foundations 1 F4d: a time-budget stop with stale chunks left records reason, remaining count and resume command (src/core/embed-budget-stop.ts)
