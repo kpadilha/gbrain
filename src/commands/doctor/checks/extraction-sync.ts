@@ -1425,8 +1425,10 @@ export async function checkSyncFreshness(
         // `storedVersion !== null && storedVersion !== current` — so mirror
         // that: NULL carries no recorded mismatch, while a recorded version
         // that differs still disables the short-circuit below.
-        const chunkerMatch =
-          source.chunker_version === null || source.chunker_version === currentChunkerVersion;
+        // Managed sync (persistence/sync-run.ts) never reads this stamp and only rewrites it on a full walk,
+        // so a stamp predating chunkerStamp() (e.g. '8' vs '8;lua=1') is not work it would do.
+        const chunkerMatch = managed
+          || source.chunker_version === null || source.chunker_version === currentChunkerVersion;
         if (gitState === 'unchanged' && chunkerMatch) {
           unchanged_count++;
           continue;
