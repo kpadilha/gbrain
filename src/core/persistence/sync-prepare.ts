@@ -299,9 +299,9 @@ async function resolveSyncOrigin(engine: BrainEngine, row: WriteRequest, p: Sync
  * so the member is released without a zombie statement pinning a connection until the ceiling.
  */
 /**
- * `screening.unsaved`: a waiver screen of a frozen entry the cursor does not yet name (a waiver run's head and followers).
- * Its validation also accepts this run's cursor with nothing pending; the waiver transaction then requires exactly that
- * cursor (run, index, nothing pending) under its lock.
+ * `screening.unsaved`: a waiver screen of a frozen entry the cursor does not yet name (a waiver run's head and followers,
+ * or a bulk group's follower while the cursor's pending is the group head). Its validation accepts any cursor of this
+ * run; the waiver transaction then requires exactly its cursor (run, index, pending) under its lock.
  */
 export async function prepareManagedSyncMutation(unbounded: BrainEngine, row: WriteRequest, _config: GBrainConfig, clock?: ClaimPhaseClock,
   screening?: { unsaved: true }): Promise<PreparedMutation> {
@@ -359,7 +359,7 @@ export async function prepareManagedSyncMutation(unbounded: BrainEngine, row: Wr
       async () => { if (await earlierGroupMemberFailed(tx, row)) throw syncPublicationRefusal('revision_conflict', 'An earlier page of this sync did not commit.', row, p, `Request ${row.request_id} follows a page of the same bulk group that did not commit, so this page must not publish after it.`); },
       async () => {
         const cursor = await shared;
-        if (cursor && (cursor.run_id !== p.runId || (cursor.request_id !== row.request_id && !cursor.group?.includes(row.request_id) && !(screening?.unsaved && cursor.request_id == null)))) throw syncPublicationRefusal('revision_conflict', 'The accepted sync cursor changed before publication.', row, p,
+        if (cursor && (cursor.run_id !== p.runId || (!screening?.unsaved && cursor.request_id !== row.request_id && !cursor.group?.includes(row.request_id)))) throw syncPublicationRefusal('revision_conflict', 'The accepted sync cursor changed before publication.', row, p,
           `Another sync run of ${row.source_id} replaced the cursor this request belongs to.`);
       },
       async () => { if (p.kind !== 'managed_sync_checkpoint') await assertKnowledgePublicationAllowed(tx, row, p.path === null ? undefined : { root, path: join(root, p.path) }); },
