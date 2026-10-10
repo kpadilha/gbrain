@@ -393,7 +393,8 @@ const warnedScreenRefusals = new Set<string>();
  */
 function warnUnexpectedScreenRefusal(error: unknown): void {
   if (error instanceof SyncPreparationBudgetExceeded || (error instanceof OperationError && error.code !== 'revision_conflict')) return;
-  const cause = `${error instanceof OperationError ? error.code : error instanceof Error ? error.name : typeof error}: ${error instanceof Error ? error.message : String(error)}`;
+  // Keyed by class only: driver messages can carry slugs or values and vary per entry.
+  const cause = error instanceof OperationError ? error.code : error instanceof Error ? error.name : typeof error;
   if (warnedScreenRefusals.has(cause)) return;
   warnedScreenRefusals.add(cause);
   console.warn(`[persistence] A no-op sync screen failed, so the entry is admitted instead of waived: ${cause}`);
