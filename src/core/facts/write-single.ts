@@ -37,6 +37,7 @@
  * FactsBackstopCtx (whose `source` union is pipeline-internal).
  */
 
+import { redactStoredText } from '../secret-scan.ts';
 import type { BrainEngine, FactInsertStatus, NewFact } from '../engine.ts';
 import { maintenanceTransaction } from '../persistence/attribution.ts';
 import { recordTaintEdges } from '../trust/taint.ts';
@@ -150,7 +151,7 @@ export async function writeSingleFact(
   if (!await factEmbeddingDisabled(engine) && isAvailable('embedding')) {
     try {
       embeddingModel = getEmbeddingModel();
-      embedding = await embedOne(factText, { embeddingModel, inputType: 'document' });
+      embedding = await embedOne(redactStoredText(factText), { embeddingModel, inputType: 'document' });
     } catch {
       degradedDedup = true;
     }
