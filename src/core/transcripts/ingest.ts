@@ -27,11 +27,13 @@
  * must never skip work permanently.
  */
 
+import { createHash, randomUUID } from 'node:crypto';
 import type { BrainEngine } from '../engine.ts';
 import { importFromContent } from '../import-file.ts';
 import type { OperationContext } from '../ops/contract.ts';
 import { managedPersistenceEnabled } from '../persistence/ownership.ts';
-import { submitPageMutation } from '../persistence/page-mutations.ts';
+import { requestPrincipalForContext, submitPageMutation } from '../persistence/page-mutations.ts';
+import { getWriteRequest } from '../persistence/journal.ts';
 import { canonicalJson } from '../remediation-step.ts';
 import type { FileDiagnostics, TranscriptAdapter, TranscriptFormat } from './types.ts';
 import { detectAdapter } from './detect.ts';
@@ -166,6 +168,22 @@ function lastMessageTs(messages: Array<{ timestamp: string }>): string {
 }
 
 const RUN_ABORT_MARKER = 'transcripts-ingest run abort';
+
+/** Replay ID bound to the page revision: a retried scan reuses the receipt, a later change of state never does. */
+export function transcriptWriteRequestId(kind: string, sourceId: string, slug: string, revision: string, content = ''): string {
+  const hex = createHash('sha256').update(`v3\0${kind}\0${sourceId}\0${slug}\0${revision}\0${content}`).digest('hex').slice(0, 32);
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-5${hex.slice(13, 16)}-${((parseInt(hex[16], 16) & 3) | 8).toString(16)}${hex.slice(17, 20)}-${hex.slice(20)}`;
+}
+
+/** A page with no snapshot (never written, or purged) is always a fresh intent, as is a retry after a terminal failure. */
+export async function nextTranscriptRequestId(ctx: OperationContext, sourceId: string, kind: string, slug: string, content = '',
+  snapshot?: { revision: string } | null): Promise<string> {
+  if (snapshot === undefined) snapshot = await ctx.engine.readPageSnapshot(slug, { sourceId, includeDeleted: true });
+  if (!snapshot) return randomUUID();
+  const id = transcriptWriteRequestId(kind, sourceId, slug, snapshot.revision, content);
+  const prior = await getWriteRequest(ctx.engine, await requestPrincipalForContext(ctx), id);
+  return prior && ['failed', 'conflict', 'cancelled'].includes(prior.state) ? randomUUID() : id;
+}
 
 function isPerSessionImportError(err: unknown): boolean {
   // 'invalid byte sequence' is Postgres rejecting the DATA (e.g. a U+0000 a
@@ -439,9 +457,11 @@ export async function runTranscriptsIngest(
                     operation: 'delete_page',
                     waitMs: 60_000,
                     params: {
+                      request_id: await nextTranscriptRequestId(coordinator, opts.sourceId, 'delete_page', row.slug),
                       source_id: opts.sourceId,
                       slug: row.slug,
                       force: true,
+                      database_only: true,
                     },
                   });
                 } else {
@@ -496,7 +516,8 @@ async function submitTranscriptPart(
   const snapshot = await engine.readPageSnapshot(part.slug, { sourceId, includeDeleted: true });
   const receipt = await submitPageMutation(ctx, {
     operation: 'put_page',
-    params: { slug: part.slug, content: part.content, source_id: sourceId, database_only: true, ...provenance,
+    params: { request_id: await nextTranscriptRequestId(ctx, sourceId, 'put_page', part.slug, part.content, snapshot),
+      slug: part.slug, content: part.content, source_id: sourceId, database_only: true, ...provenance,
       ...(snapshot?.revision ? { expected_revision: snapshot.revision } : {}) },
   });
   const slug = typeof receipt.slug === 'string' && receipt.slug ? receipt.slug : part.slug;
