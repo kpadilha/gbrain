@@ -53,9 +53,9 @@ function makeRepo(detached: boolean): string {
 }
 
 /** Same shape the v0.41.27.0 suite uses; getConfig stays optional. */
-function stubEngine(rows: any[], config?: Record<string, string>): any {
+function stubEngine(rows: any[], config?: Record<string, string>, managed = false): any {
   return {
-    executeRaw: async () => rows,
+    executeRaw: async (sql: string) => (/^SELECT enabled FROM persistence_brain/.test(sql) ? [{ enabled: managed }] : rows),
     ...(config ? { getConfig: async (k: string) => config[k] } : {}),
   };
 }
@@ -113,6 +113,12 @@ describe('sync_freshness mirrors sync\'s up-to-date predicate', () => {
     const result = await checkSyncFreshness(stubEngine([row(makeRepo(false), '0')]), { localOnly: true });
     expect(result.status).toBe('fail');
     expect(result.details?.stale_count).toBe(1);
+  });
+
+  test('managed brain + pre-stamp chunker_version → ok (managed sync never reads the stamp)', async () => {
+    const result = await checkSyncFreshness(stubEngine([row(makeRepo(false), '8')], undefined, true), { localOnly: true });
+    expect(result.status).toBe('ok');
+    expect(result.details).toEqual({ unchanged_count: 1, synced_recently_count: 0, stale_count: 0 });
   });
 
   // Guard the probe contract itself: no clean probe when sync would not import
