@@ -442,3 +442,17 @@ test('lanes and --no-lanes build the same pages and the same links from a cross-
   expect((await graph(laned.id)).length).toBeGreaterThan(0);
   expect(await pages(laned.id)).toEqual(await pages(serial.id));
 }), 300_000);
+
+test('a changed working-tree file followed by unchanged ones admits only the changed file; the unchanged ones end its group and are waived', async () => withEnv({ GBRAIN_HOME: home, GBRAIN_SYNC_BULK_SIZE: '8' }, async () => {
+  if (!engine) return;
+  const f = await fixture(engine, notes(24));
+  const edit = (i: number, body: string) => writeFileSync(join(f.root, `notes/n${pad(i)}.md`), `---\ntitle: Note ${i}\n---\n${body} ${i}.\n`);
+  const sync = () => performSync(engine!, { sourceId: f.id, noPull: true, noEmbed: true, noExtract: true, drain: true, workingTree: true, lanes: 4 });
+  // Uncommitted edits stay in every working-tree manifest, so each later run screens all 24 again.
+  for (let i = 0; i < 24; i++) edit(i, 'An uncommitted observation');
+  expect((await sync()).drain).toMatchObject({ outcome: 'synced' });
+  const before = (await imports(engine, f.id)).length;
+  edit(0, 'A changed observation');
+  expect((await sync()).drain).toMatchObject({ outcome: 'synced' });
+  expect((await imports(engine, f.id)).slice(before).map(row => `${row.slug} ${row.state}`)).toEqual(['notes/n000 committed']);
+}), 300_000);
