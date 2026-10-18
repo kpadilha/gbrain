@@ -208,7 +208,7 @@ const remember: Operation = {
           `Pass the capture session id (max ${METADATA_ID_MAX} chars), e.g. session_id: "topic-abc123".`,
         );
       }
-      sessionId = v;
+      sessionId = redact(v);
     }
     let eventType: string | undefined;
     if (p.event_type !== undefined && p.event_type !== null) {
@@ -220,7 +220,7 @@ const remember: Operation = {
           `Pass an event marker (max ${METADATA_ID_MAX} chars), e.g. event_type: "file_edit".`,
         );
       }
-      eventType = v;
+      eventType = redact(v);
     }
     let observedAt: string | undefined;
     if (p.observed_at !== undefined && p.observed_at !== null) {

@@ -1873,7 +1873,7 @@ export class PostgresEngine implements BrainEngine {
 
   async mergeOntologyFact(obs: OntologyObservationInput): Promise<OntologyMergeResult> {
     // ontology_propose takes caller strings; redact before value_hash so dedup keys stay deterministic.
-    obs = { ...obs, value: redactStoredText(obs.value), source: redactStoredText(obs.source) };
+    obs = { ...obs, dimension: redactStoredText(obs.dimension), value: redactStoredText(obs.value), source: redactStoredText(obs.source) };
     const sql = this.sql;
     const sourceId = obs.sourceId ?? 'default';
     const dimension = normalizeDimension(obs.dimension);
