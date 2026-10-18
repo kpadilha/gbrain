@@ -110,17 +110,32 @@ describe('remember entity inference (#5836)', () => {
     expect(JSON.stringify(journal)).not.toContain(fake);
   });
 
+  test('remember redacts session_id and event_type, and redactFactText covers the claim columns', async () => {
+    const fake = ['ghp', '_', 'Hv8Qw3Lr5Xk1Zm7Vb4Nc2Jd9Fs6Gy0Ya5UeBt'].join('');
+    const r = await remember({ entity: 'people/alice-example', fact: 'Alice Example opened a session', provenance: 'chat', session_id: `s-${fake}`, event_type: `e-${fake}` });
+    const [row] = await engine.executeRaw<{ source_session: string; event_type: string }>('SELECT source_session,event_type FROM facts WHERE id=$1', [Number(r.id)]);
+    expect(JSON.stringify(row)).not.toContain(fake);
+    expect(row!.event_type).toMatch(/^e-<REDACTED:/);
+    const { redactFactText } = await import('../src/core/secret-scan.ts');
+    const cleaned = redactFactText({ fact: 'x', claim_metric: fake, claim_unit: fake, claim_period: fake, attributed_to: fake, claim_value: 7 });
+    expect(JSON.stringify(cleaned)).not.toContain(fake);
+    expect(cleaned.claim_value).toBe(7);
+  });
+
   test('ontology_propose redacts value and source, and a repeat stays a deterministic no-op', async () => {
     const fake = ['ghp', '_', 'Tn5Qw9Lr3Xk7Zm1Vb6Hc2Jd8Fs0Gy4Ya3UeRa'].join('');
     const propose = () => operationsByName.ontology_propose!.handler(context(),
       { entity: 'people/alice-example', dimension: 'role', value: `admin ${fake}`, source: `chat ${fake}` }) as Promise<Record<string, any>>;
     const first = await propose();
     expect(first.factId).toBeGreaterThan(0);
-    const [row] = await engine.executeRaw<{ fact: string; value: string; source: string; source_markdown_slug: string }>(
-      'SELECT fact,value,source,source_markdown_slug FROM facts WHERE id=$1', [first.factId]);
-    for (const stored of Object.values(row!)) expect(stored).not.toContain(fake);
+    const [row] = await engine.executeRaw<{ fact: string; value: string; source: string; source_markdown_slug: string; dimension: string }>(
+      'SELECT fact,value,source,source_markdown_slug,dimension FROM facts WHERE id=$1', [first.factId]);
+    for (const stored of Object.values(row!)) expect(stored.toLowerCase()).not.toContain(fake.toLowerCase());
     expect(row!.fact).toMatch(/^role: admin <REDACTED:[^>]+>$/);
     expect((await propose()).action).toBe('noop');
+    const odd = await operationsByName.ontology_propose!.handler(context(), { entity: 'people/alice-example', dimension: `role ${fake}`, value: 'x', source: 'manual' }) as Record<string, any>;
+    const [dim] = await engine.executeRaw<{ dimension: string }>('SELECT dimension FROM facts WHERE id=$1', [odd.factId]);
+    expect(dim!.dimension.toLowerCase()).not.toContain(fake.toLowerCase());
   });
 
   test('an imported user-authored fence keeps its bytes while the derived fact rows are redacted', async () => {

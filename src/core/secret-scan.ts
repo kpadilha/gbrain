@@ -1453,9 +1453,11 @@ export function redactStoredText(text: string): string {
   return redactFindings(text, { highEntropy: true }).text;
 }
 
-/** Redacts a fact's free-text columns (fact, source, context); structured fields pass through. */
-export function redactFactText<T extends { fact: string; source?: string | null; context?: string | null }>(f: T): T {
-  return { ...f, fact: redactStoredText(f.fact),
-    ...(typeof f.source === 'string' ? { source: redactStoredText(f.source) } : {}),
-    ...(typeof f.context === 'string' ? { context: redactStoredText(f.context) } : {}) };
+const FACT_TEXT_COLUMNS = ['source', 'context', 'claim_metric', 'claim_unit', 'claim_period', 'attributed_to', 'event_type', 'source_session'] as const;
+
+/** Redacts a fact's free-text columns; numeric and structured fields pass through. */
+export function redactFactText<T extends { fact: string }>(f: T): T {
+  const out: Record<string, unknown> = { ...f, fact: redactStoredText(f.fact) };
+  for (const key of FACT_TEXT_COLUMNS) if (typeof out[key] === 'string') out[key] = redactStoredText(out[key] as string);
+  return out as T;
 }
