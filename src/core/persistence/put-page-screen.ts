@@ -29,13 +29,13 @@ import { preparePageAdmission } from './page-mutations.ts';
 import { preparePageMutation } from './page-prepare.ts';
 
 export async function unchangedPutPage(ctx: OperationContext, params: Record<string, unknown> & { slug: string; source_id: string },
-  snapshot: PageSnapshot | null): Promise<boolean> {
+  snapshot: PageSnapshot | null, databaseOnly?: 'explicit_local_db_only'): Promise<boolean> {
   if (!snapshot || snapshot.page.deleted_at || isSegmentedPage(snapshot.page)) return false;
   try {
     const [pending] = await ctx.engine.executeRaw(`SELECT 1 FROM persistence_requests WHERE source_id=$1 AND slug=$2 AND intent IS NOT NULL AND NOT compacted
       AND (state NOT IN ('committed','conflict','failed','cancelled') OR recovery IS NOT NULL) LIMIT 1`, [params.source_id, params.slug.toLowerCase()]);
     if (pending) return false;
-    const prepared = await preparePageAdmission(ctx, { operation: 'put_page', params });
+    const prepared = await preparePageAdmission(ctx, { operation: 'put_page', params, databaseOnly });
     if (prepared.prior) return false;
     const { admission } = prepared;
     const row = screeningRequest({ source_id: admission.sourceId, source_incarnation: admission.sourceIncarnation, slug: admission.slug,

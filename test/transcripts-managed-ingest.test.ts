@@ -16,6 +16,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PGLiteEngine } from '../src/core/pglite-engine.ts';
 import { makeContext } from '../src/cli/main.ts';
+import { configFlagOff } from '../src/core/persistence/page-mutations.ts';
 import { runTranscriptsIngest } from '../src/core/transcripts/ingest.ts';
 import { runTranscripts } from '../src/commands/transcripts.ts';
 import { disposePersistenceConsumer, stopPersistenceConsumer } from '../src/core/persistence/service.ts';
@@ -75,12 +76,20 @@ const pageRequests = () => engine.executeRaw<{ slug: string; state: string; prin
 const claimBrain = () => engine.executeRaw('UPDATE persistence_brain SET enabled = true WHERE singleton = 1');
 
 describe('transcripts ingest on a writer-claimed brain', () => {
+  test('transcripts.database_only is switched off with the same spellings as sync.write_through', () => {
+    for (const off of ['false', 'FALSE', '0', 'off', 'No']) expect(configFlagOff(off)).toBe(true);
+    for (const on of [null, undefined, '', 'true', '1', 'on']) expect(configFlagOff(on)).toBe(false);
+  });
+
   test('parts commit as local put_page write requests; a grown session updates in place by revision; a repeat is skipped', async () => {
     await claimBrain();
     const first = await ingest(exportFile('a.json', false));
     expect(first).toMatchObject({ erroredFiles: 0, sessionsErrored: 0, pages: { imported: 1, errored: 0 } });
     const [page] = await conversationPages();
     expect(await pageRequests()).toEqual([{ slug: page.slug, state: 'committed', principal_kind: 'local_cli' }]);
+    // Transcripts are mirrored sessions, never canonical files.
+    expect(await engine.executeRaw("SELECT authority->>'databaseOnlyReason' AS reason FROM persistence_requests WHERE operation = 'put_page'"))
+      .toEqual([{ reason: 'explicit_local_db_only' }]);
 
     const grown = await ingest(exportFile('b.json', true));
     expect(grown).toMatchObject({ sessionsErrored: 0, pages: { imported: 1, errored: 0 } });
@@ -89,6 +98,7 @@ describe('transcripts ingest on a writer-claimed brain', () => {
 
     const repeat = await ingest(exportFile('c.json', true));
     expect(repeat.pages).toMatchObject({ imported: 0, skipped: 1, errored: 0 });
+    expect(await pageRequests()).toHaveLength(2);
   }, 120_000);
 
   test('`gbrain transcripts ingest` passes the dispatcher\'s makeContext through to the coordinated path', async () => {

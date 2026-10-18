@@ -38,7 +38,7 @@ import { randomUUID } from 'node:crypto';
 import { importFromContent } from '../import-file.ts';
 import type { OperationContext } from '../ops/contract.ts';
 import { managedPersistenceEnabled } from '../persistence/ownership.ts';
-import { initializeLocalPersistence, pendingAwareResponse, requestPrincipalForContext, submitPageMutation } from '../persistence/page-mutations.ts';
+import { configFlagOff, initializeLocalPersistence, pendingAwareResponse, requestPrincipalForContext, submitPageMutation } from '../persistence/page-mutations.ts';
 import { waitForWrite } from '../persistence/service.ts';
 import { isTerminal, type WriteRequest } from '../persistence/model.ts';
 import { clientRequestUuid } from '../persistence/preconditions.ts';
@@ -528,14 +528,20 @@ async function submitTranscriptPart(
   const snapshot = await engine.readPageSnapshot(part.slug, { sourceId, includeDeleted: true });
   const params = { slug: part.slug, content: part.content, source_id: sourceId, ...provenance,
     ...(snapshot?.revision ? { expected_revision: snapshot.revision } : {}) };
-  if (await unchangedPutPage(ctx, params, snapshot)) return { slug: part.slug, status: 'skipped' };
+  const databaseOnly = await transcriptDatabaseOnly(engine);
+  if (await unchangedPutPage(ctx, params, snapshot, databaseOnly)) return { slug: part.slug, status: 'skipped' };
   const { requestId, prior } = await transcriptPartRequest(ctx, sourceId, part.slug, params);
   const receipt = prior
     ? pendingAwareResponse(ctx, await waitForWrite(ctx.engine, prior, ctx.config, ctx.writeWaitMs))
-    : await submitPageMutation(ctx, { operation: 'put_page', params: { ...params, request_id: requestId } });
+    : await submitPageMutation(ctx, { operation: 'put_page', databaseOnly, params: { ...params, request_id: requestId } });
   const slug = typeof receipt.slug === 'string' && receipt.slug ? receipt.slug : part.slug;
   if (receipt.state !== 'committed') return { slug, status: 'error' };
   return { slug, status: receipt.noop === true || receipt.status === 'skipped' ? 'skipped' : 'imported' };
+}
+
+/** Transcript pages stay out of the canonical files unless `transcripts.database_only` is set to false. */
+async function transcriptDatabaseOnly(engine: BrainEngine): Promise<'explicit_local_db_only' | undefined> {
+  return configFlagOff(await engine.getConfig('transcripts.database_only')) ? undefined : 'explicit_local_db_only';
 }
 
 /** Attempts read per journal lookup while finding a part's current request. */
@@ -583,7 +589,8 @@ async function transcriptPartRequest(ctx: OperationContext, sourceId: string, sl
 async function deleteStaleTranscriptPart(ctx: OperationContext, engine: BrainEngine, sourceId: string, slug: string): Promise<void> {
   const snapshot = await engine.readPageSnapshot(slug, { sourceId });
   if (!snapshot) return;
-  const receipt = await submitPageMutation({ ...ctx, admissionOrigin: 'background' }, { operation: 'delete_page', params: { slug, source_id: sourceId, expected_revision: snapshot.revision, request_id: randomUUID() } })
+  const receipt = await submitPageMutation({ ...ctx, admissionOrigin: 'background' }, { operation: 'delete_page', databaseOnly: await transcriptDatabaseOnly(engine),
+    params: { slug, source_id: sourceId, expected_revision: snapshot.revision, request_id: randomUUID() } })
     .catch((err: unknown) => {
       if (classifyItemFailure(err).code !== 'owner_unavailable') throw err;
       throw new Error(`stale part ${slug} was not deleted: ${err instanceof Error ? err.message : String(err)}`);

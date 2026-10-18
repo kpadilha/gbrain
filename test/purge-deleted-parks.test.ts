@@ -188,6 +188,8 @@ describe('#6741 C: background admissions refuse before any receipt against a wor
   }, 120_000);
 
   test('the transcript stale-part delete is a background admission: refused, no request id, the session errors', async () => {
+    // The recovering worktree only gates file-backed publication, which the local default (database-only) skips.
+    await engine.setConfig('transcripts.database_only', 'false');
     const message = (role: string, t: number, text: string) => ({ author: { role }, create_time: t, content: { content_type: 'text', parts: [text] } });
     const path = join(dir, 'export.json');
     writeFileSync(path, JSON.stringify([{ title: 'Stale parts', create_time: 1786080000, update_time: 1786080015, conversation_id: 'cgpt-stale-1', current_node: 'n2',

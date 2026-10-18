@@ -175,6 +175,11 @@ async function resolveCaptureFile(ctx: OperationContext, sourceId: string, p: Re
   return resolveSlugForPath(scannerSourcePath(canonicalRoot, join(canonicalRoot, capturePath), await scannerSlugRootMode(ctx.engine, sourceId, canonicalRoot)));
 }
 
+/** Boolean config parsing shared with `sync.write_through`: false, 0, off or no, any case. */
+export function configFlagOff(value: string | null | undefined): boolean {
+  return /^(false|0|off|no)$/i.test(value ?? '');
+}
+
 /** Trusted local CLI context for machine importers that submit through the coordinator. */
 export function localWriteContext(engine: OperationContext['engine'], sourceId: string): OperationContext {
   return { engine, sourceId, config: loadConfig() ?? { engine: engine.kind },
@@ -229,7 +234,7 @@ const OWNER_FILE_INTENTS: ReadonlySet<string> = new Set(['managed_file_import', 
 export interface PageBatchMember { id: string; index: number; size: number; requestId: string; repeats?: number[] }
 
 export async function submitPageMutation(ctx: OperationContext,
-  input: { operation: string; params: Record<string, unknown>; waitMs?: number; managedFileImport?: true; timelineSection?: TimelineSection; databaseOnly?: 'overwrite_restore' | 'database_only_import' }): Promise<Record<string, unknown>> {
+  input: { operation: string; params: Record<string, unknown>; waitMs?: number; managedFileImport?: true; timelineSection?: TimelineSection; databaseOnly?: 'overwrite_restore' | 'explicit_local_db_only' }): Promise<Record<string, unknown>> {
   assertPersistenceAccepting(ctx.engine);
   // #6007: wait_ms is a reply deadline from arrival, never part of the write's identity.
   const arrived = performance.now();
@@ -267,7 +272,7 @@ export async function submitPageMutation(ctx: OperationContext,
 export async function preparePageAdmission(ctx: OperationContext,
   input: { operation: string; params: Record<string, unknown>; managedFileImport?: true; batch?: PageBatchMember; timelineSection?: TimelineSection;
     /** #6712 `repair overwritten-edits`: publish to the database only, so the restore never rewrites the committed file. */
-    databaseOnly?: 'overwrite_restore' | 'database_only_import' }
+    databaseOnly?: 'overwrite_restore' | 'explicit_local_db_only' }
 ): Promise<{ prior: WriteRequest; admission?: undefined; typeWarning?: undefined; slugAdvisory?: undefined } | { prior?: undefined; admission: WriteAdmission; typeWarning: PageTypeWarning | null; slugAdvisory: string | null }> {
   if (input.operation === 'put_page' && ['kind', 'preview', 'backup_reference'].some(key => Object.hasOwn(input.params, key))) {
     if (ctx.remote !== false || input.managedFileImport !== true || !OWNER_FILE_INTENTS.has(String(input.params.kind)) ||
@@ -387,7 +392,7 @@ export async function preparePageAdmission(ctx: OperationContext,
   }
   let binding = boundAtStart;
   const sandbox = ctx.viaSubagent === true && !(ctx.allowedSlugPrefixes?.length);
-  const configuredWriteThrough = !/^(false|0|off|no)$/i.test(writeThroughSetting ?? 'true');
+  const configuredWriteThrough = !configFlagOff(writeThroughSetting);
   const writeThrough = configuredWriteThrough && !sandbox && !input.databaseOnly;
   const root = source.local_path || repoPath;
   if (sandbox) authority.databaseOnlyReason = 'subagent_sandbox';

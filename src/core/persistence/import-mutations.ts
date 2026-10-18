@@ -176,7 +176,7 @@ export async function importManagedDatabaseOnly(engine: BrainEngine, filePath: s
   if (!current || current.state !== 'active' || String(current.owner_epoch) !== String(owner.binding!.owner_epoch)) {
     throw new OperationError('owner_unavailable', 'The import owner changed.');
   }
-  const r = await submitPageMutation(ctx, { operation: 'put_page', waitMs: IMPORT_WAIT_MS, databaseOnly: 'database_only_import', params: {
+  const r = await submitPageMutation(ctx, { operation: 'put_page', waitMs: IMPORT_WAIT_MS, databaseOnly: 'explicit_local_db_only', params: {
     request_id: requestId, source_id: owner.sourceId, slug, content, allow_empty: true, ingested_via: 'cli:import',
     ...(snapshot ? { expected_revision: snapshot.revision } : {}) } });
   return { slug: typeof r.slug === 'string' && r.slug ? r.slug : slug,

@@ -53,6 +53,8 @@ beforeEach(async () => {
     await engine.executeRaw('INSERT INTO sources(id,name,local_path) VALUES($1,$1,$2)', [SOURCE, root]);
     await registerLocalWriter(engine, 'cli');
     await claimWorktree(engine, SOURCE, root);
+    // These cases cover the file-backed publication, which the local default (database-only) skips.
+    await engine.setConfig('transcripts.database_only', 'false');
     await engine.executeRaw('UPDATE persistence_brain SET enabled=true WHERE singleton=1');
   });
   return () => rmSync(dir, { recursive: true, force: true });
