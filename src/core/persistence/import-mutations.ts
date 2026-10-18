@@ -172,8 +172,6 @@ export async function importManagedDatabaseOnly(engine: BrainEngine, filePath: s
   let requestId = snapshot ? importWriteRequestId(owner.sourceId, slug, content, snapshot.revision) : randomUUID();
   const prior = snapshot ? await getWriteRequest(engine, await requestPrincipalForContext(ctx), requestId) : null;
   if (prior && ['failed', 'conflict', 'cancelled'].includes(prior.state)) requestId = randomUUID();
-  // The id binds source, slug, revision and bytes, so a committed receipt already applied this write; its digest may predate this build.
-  else if (prior?.state === 'committed') return { slug, status: 'skipped', chunks: 0 };
   const current = await getWorktreeBinding(engine, owner.sourceId);
   if (!current || current.state !== 'active' || String(current.owner_epoch) !== String(owner.binding!.owner_epoch)) {
     throw new OperationError('owner_unavailable', 'The import owner changed.');
