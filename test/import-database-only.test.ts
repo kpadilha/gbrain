@@ -10,6 +10,7 @@ import { runImport } from '../src/commands/import.ts';
 import { importWriteRequestId, localWriteContext, submitPageMutation } from '../src/core/persistence/page-mutations.ts';
 import { createHash } from 'node:crypto';
 import { importManagedDatabaseOnly } from '../src/core/persistence/import-mutations.ts';
+import { intentDigest } from '../src/core/persistence/journal.ts';
 import { withSubmissionAuthority } from '../src/core/minions/submission-authority.ts';
 import { withEnv } from './helpers/with-env.ts';
 
@@ -101,6 +102,28 @@ test('gbrain import --database-only writes a managed brain through the coordinat
     writeFileSync(join(staging, 'people-alice.md'), '');
     await runImport(engine, [staging, '--no-embed', '--database-only', '--source-id', 'default']);
     expect((await engine.getPage('people-alice', { sourceId: 'default' }))?.compiled_truth ?? '').not.toContain('One.');
+  });
+}, 120_000);
+
+test('database-only import replays receipts written with and without the database_only intent field', async () => {
+  await withEnv({ GBRAIN_HOME: home }, async () => {
+    const staging = join(home, 'staging-receipt-shapes');
+    mkdirSync(staging);
+    writeFileSync(join(staging, 'receipt-shapes.md'), '---\ntitle: Shapes\n---\n\nBody.\n');
+    const again = () => runImport(engine, [staging, '--no-embed', '--database-only', '--source-id', 'default']);
+    // The first run creates the page under a random id; the second records the deterministic receipt a later replay meets.
+    await again();
+    await again();
+    const [row] = await engine.executeRaw<{ request_id: string; intent: Record<string, unknown> }>(
+      "SELECT request_id, intent FROM persistence_requests WHERE slug='receipt-shapes' AND operation='put_page' ORDER BY created_at DESC LIMIT 1");
+    // timeline_section is stored with the intent but is not part of the digested caller intent.
+    const { database_only: _dropped, timeline_section: _section, ...modern } = row.intent;
+    for (const intent of [{ ...modern, database_only: true }, modern]) {
+      await engine.executeRaw('UPDATE persistence_requests SET digest=$2 WHERE request_id=$1::uuid',
+        [row.request_id, intentDigest({ operation: 'put_page', sourceId: 'default', slug: 'receipt-shapes', callerIntent: intent })]);
+      const run = await again();
+      expect({ errors: run.errors, failures: run.failures }).toEqual({ errors: 0, failures: [] });
+    }
   });
 }, 120_000);
 
