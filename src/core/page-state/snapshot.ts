@@ -7,7 +7,7 @@ import type { GlobalPurgeMarker, PageSnapshot, PageSnapshotOptions, PageWithdraw
 import { PageSnapshotAmbiguousError, REVISION_BACKFILL_PENDING } from './types.ts';
 
 /**
- * Subject-'*' fact purges that name a fence row of the given DB-normalized
+ * Subject-'*' fact purges that name a fence row of the given original-case
  * text, as purge withdrawals. Snapshot reads carry only a marker for them
  * (GlobalPurgeMarker), because listing every '*' tombstone of a source made
  * each snapshot aggregate the whole ledger. The lookup runs on the caller's
@@ -19,9 +19,9 @@ import { PageSnapshotAmbiguousError, REVISION_BACKFILL_PENDING } from './types.t
  * ledger itself (facts/purge-overlay.ts) before anything is published.
  */
 export async function resolveGlobalPurges(query: ReadQuery, sourceId: string, marker: GlobalPurgeMarker | undefined,
-  normalizedTexts: readonly string[]): Promise<PageWithdrawal[]> {
+  rawTexts: readonly string[]): Promise<PageWithdrawal[]> {
   if (!marker || marker.count <= 0) return [];
-  const hashes = fenceClaimHashes(normalizedTexts);
+  const hashes = fenceClaimHashes(rawTexts);
   if (!hashes.length) return [];
   const rows = await query<{ w: PageWithdrawal }>(`SELECT jsonb_build_object('visibility',visibility,'fact_hash',fact_hash,
       'withdrawn_at',min(purged_at),'purged',true) AS w
@@ -44,7 +44,7 @@ export async function overlayCanonicalBodies(query: ReadQuery, body: string, tim
       FROM unnest(string_to_array($1::text,chr(10))) WITH ORDINALITY AS lines(line,ord)) AS body,
     (SELECT string_agg(regexp_replace(lower(line),'[[:space:]]+',' ','g'),chr(10) ORDER BY ord)
       FROM unnest(string_to_array($2::text,chr(10))) WITH ORDINALITY AS lines(line,ord)) AS timeline`, [body, timeline]);
-  const resolved = pending ? await resolveGlobalPurges(query, pending.sourceId, pending.marker, [normalized.body ?? '', normalized.timeline ?? '']) : [];
+  const resolved = pending ? await resolveGlobalPurges(query, pending.sourceId, pending.marker, [body, timeline]) : [];
   const all = resolved.length ? [...withdrawals, ...resolved] : withdrawals;
   return { compiled_truth: overlayWithdrawalBody(body, normalized.body ?? '', all),
     timeline: overlayWithdrawalBody(timeline, normalized.timeline ?? '', all) };
@@ -126,7 +126,7 @@ async function readSnapshotStatement(query: ReadQuery, slug: string, opts?: Page
   const raw = (typeof row.snapshot_global_purges === 'string' ? JSON.parse(row.snapshot_global_purges) : row.snapshot_global_purges) as { count?: unknown; latest?: unknown } | null;
   const globalPurges: GlobalPurgeMarker = { count: Number(raw?.count ?? 0), latest: raw?.latest == null ? null : String(raw.latest), world_only: opts?.excludePrivate === true };
   const withdrawals = [...row.snapshot_withdrawals as PageWithdrawal[], ...await resolveGlobalPurges(query, page.source_id, globalPurges,
-    [String(row.fingerprint_body ?? ''), String(row.fingerprint_timeline ?? '')])];
+    [page.compiled_truth, page.timeline])];
   if (!isSegmentedPage(page)) {
     page.compiled_truth = overlayWithdrawalBody(page.compiled_truth, String(row.fingerprint_body ?? ''), withdrawals);
     page.timeline = overlayWithdrawalBody(page.timeline, String(row.fingerprint_timeline ?? ''), withdrawals);

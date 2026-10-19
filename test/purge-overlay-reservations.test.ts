@@ -6,9 +6,7 @@
 import { afterAll, beforeAll, expect, test } from 'bun:test';
 import { PGLiteEngine } from '../src/core/pglite-engine.ts';
 import { dropPurgedFenceRows } from '../src/core/facts/purge-overlay.ts';
-import { createHash } from 'node:crypto';
 import { fenceClaimHashes } from '../src/core/facts/withdrawal-overlay.ts';
-import { normalizeLoweredClaim } from '../src/core/facts/withdrawal-schema.ts';
 import { redactStoredText } from '../src/core/secret-scan.ts';
 import { TAKES_FENCE_BEGIN, TAKES_FENCE_END, parseTakesFence, renderTakesFence } from '../src/core/takes-fence.ts';
 
@@ -47,8 +45,7 @@ test('a fence row holding a raw secret is dropped by the purge of its redacted c
   expect(out).not.toContain('Deploy key');
 });
 
-test('fenceClaimHashes covers the redacted claim of a raw-secret fence row', () => {
-  const hashes = fenceClaimHashes([secretFence.toLowerCase()]);
-  const redacted = createHash('sha256').update(normalizeLoweredClaim(redactStoredText(RAW.toLowerCase()))).digest('hex');
-  expect(hashes).toContain(redacted);
+test('fenceClaimHashes covers the ledger fingerprint of a raw-secret fence row', async () => {
+  const [{ fp }] = await engine.executeRaw<{ fp: string }>('SELECT gbrain_fact_fingerprint($1) AS fp', [redactStoredText(RAW)]);
+  expect(fenceClaimHashes([secretFence])).toContain(fp);
 });
