@@ -118,8 +118,10 @@ export function fenceClaimHashes(normalizedTexts: readonly string[]): string[] {
     if (!text.includes('gbrain:facts:begin')) continue;
     for (const block of withdrawalFenceBlocks(text)) {
       for (const f of block.parsed.facts) {
-        hashes.add(createHash('sha256').update(normalizeLoweredClaim(f.claim)).digest('hex'));
-        hashes.add(createHash('sha256').update(f.claim).digest('hex'));
+        // Ledger hashes cover the stored, redacted claim, as in overlayWithdrawalBody.
+        const claim = redactStoredText(f.claim);
+        hashes.add(createHash('sha256').update(normalizeLoweredClaim(claim)).digest('hex'));
+        hashes.add(createHash('sha256').update(claim).digest('hex'));
       }
     }
   }

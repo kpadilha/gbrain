@@ -11,6 +11,7 @@ import type { BrainEngine } from '../engine.ts';
 import { renderFactsTable } from '../facts-fence.ts';
 import { locateOutsideCode } from '../fence-scan.ts';
 import { TAKES_FENCE_BEGIN, TAKES_FENCE_END, parseTakesFence, renderTakesFence } from '../takes-fence.ts';
+import { redactStoredText } from '../secret-scan.ts';
 import { withdrawalFenceBlocks } from './withdrawal-overlay.ts';
 
 /** True when the source has any fact or take purge tombstone (one indexed probe). */
@@ -35,7 +36,7 @@ export async function dropPurgedFenceRows(engine: BrainEngine, sourceId: string,
         SELECT DISTINCT incoming.row_num FROM incoming JOIN fact_purges p ON p.source_id=$1
           AND p.visibility=incoming.visibility AND p.fact_hash=incoming.fp
           AND ($3::text IS NULL OR p.subject='*' OR p.subject=$3::text)`,
-      [sourceId, JSON.stringify(block.parsed.facts.map(f => ({ row_num: f.rowNum, claim: f.claim, visibility: f.visibility }))), subject ?? null]);
+      [sourceId, JSON.stringify(block.parsed.facts.map(f => ({ row_num: f.rowNum, claim: redactStoredText(f.claim), visibility: f.visibility }))), subject ?? null]);
       if (!rows.length) continue;
       const drop = new Set(rows.map(r => Number(r.row_num)));
       body = body.slice(0, block.start) + renderFactsTable(block.parsed.facts.filter(f => !drop.has(f.rowNum))) + body.slice(block.end);

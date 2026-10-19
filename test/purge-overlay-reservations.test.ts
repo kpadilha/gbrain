@@ -6,6 +6,10 @@
 import { afterAll, beforeAll, expect, test } from 'bun:test';
 import { PGLiteEngine } from '../src/core/pglite-engine.ts';
 import { dropPurgedFenceRows } from '../src/core/facts/purge-overlay.ts';
+import { createHash } from 'node:crypto';
+import { fenceClaimHashes } from '../src/core/facts/withdrawal-overlay.ts';
+import { normalizeLoweredClaim } from '../src/core/facts/withdrawal-schema.ts';
+import { redactStoredText } from '../src/core/secret-scan.ts';
 import { TAKES_FENCE_BEGIN, TAKES_FENCE_END, parseTakesFence, renderTakesFence } from '../src/core/takes-fence.ts';
 
 let engine: PGLiteEngine;
@@ -25,4 +29,26 @@ test('a purged take row leaves a reservation and existing reservations survive',
   expect(parsed.takes.map(t => [t.rowNum, t.claim])).toEqual([[1, 'Keep this claim'], [4, 'Keep this one too']]);
   expect(parsed.reservedRowNums.sort()).toEqual([2, 3]);
   expect(out).not.toContain('Purge this claim');
+});
+
+// Purge ledgers hash the stored (redacted) claim; a user-authored fence row keeps its raw secret.
+const RAW = 'Deploy key is ghp_' + 'a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6q7R8';
+const secretFence = `<!--- gbrain:facts:begin -->
+| # | claim | kind | confidence | visibility | notability | valid_from | valid_until | source | context |
+|---|-------|------|------------|------------|------------|------------|-------------|--------|---------|
+| 1 | ${RAW} | fact | 1.0 | world | medium | 2026-01-01 |  | chat |  |
+<!--- gbrain:facts:end -->`;
+
+test('a fence row holding a raw secret is dropped by the purge of its redacted claim', async () => {
+  expect(redactStoredText(RAW)).not.toBe(RAW);
+  await engine.executeRaw(`INSERT INTO fact_purges(source_id, visibility, subject, fact_hash) VALUES ('default', 'world', '*', gbrain_fact_fingerprint($1))`, [redactStoredText(RAW)]);
+  const out = await dropPurgedFenceRows(engine, 'default', `# Page\n\n${secretFence}\n`, 'people/alice-example');
+  expect(out).not.toContain('ghp_');
+  expect(out).not.toContain('Deploy key');
+});
+
+test('fenceClaimHashes covers the redacted claim of a raw-secret fence row', () => {
+  const hashes = fenceClaimHashes([secretFence.toLowerCase()]);
+  const redacted = createHash('sha256').update(normalizeLoweredClaim(redactStoredText(RAW.toLowerCase()))).digest('hex');
+  expect(hashes).toContain(redacted);
 });
