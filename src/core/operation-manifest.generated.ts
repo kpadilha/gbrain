@@ -96,6 +96,19 @@ export const OPERATION_MANIFEST: OperationMeta[] = [
         "type": "string",
         "description": "fact_id this fact replaces (same entity, or none).",
         "fullSurfaceOnly": true
+      },
+      "session_id": {
+        "type": "string"
+      },
+      "event_type": {
+        "type": "string"
+      },
+      "observed_at": {
+        "type": "string",
+        "description": "ISO 8601 event time."
+      },
+      "context": {
+        "type": "string"
       }
     },
     "mutating": true,
