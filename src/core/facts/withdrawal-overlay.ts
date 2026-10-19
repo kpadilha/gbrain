@@ -126,6 +126,7 @@ export function fenceClaimHashes(rawTexts: readonly string[]): string[] {
         const claim = ledgerClaim(f.claim);
         hashes.add(createHash('sha256').update(normalizeLoweredClaim(claim)).digest('hex'));
         hashes.add(createHash('sha256').update(claim).digest('hex'));
+        hashes.add(createHash('sha256').update(redactStoredText(f.claim)).digest('hex'));
       }
     }
   }
@@ -174,7 +175,8 @@ export function overlayWithdrawalBody(body: string, normalizedBody: string, with
       const claim = claims.get(f.rowNum);
       if (claim === undefined) return [f];
       const entry = ledger.get(`${f.visibility}:${createHash('sha256').update(normalizeLoweredClaim(claim)).digest('hex')}`)
-        ?? ledger.get(`${f.visibility}:${createHash('sha256').update(claim).digest('hex')}`);
+        ?? ledger.get(`${f.visibility}:${createHash('sha256').update(claim).digest('hex')}`)
+        ?? ledger.get(`${f.visibility}:${createHash('sha256').update(redactStoredText(f.claim)).digest('hex')}`);
       if (!entry) return [f];
       changed = true;
       return entry.purged ? [] : [withdrawnFact(f, new Date(entry.withdrawn_at).toISOString().slice(0, 10))];
