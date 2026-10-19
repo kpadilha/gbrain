@@ -214,6 +214,7 @@ export async function runTranscriptsIngest(
     maxSessionTs: '',
   };
   let limitTruncated = false;
+  let watermarkCap = '';
 
   // Redaction patterns compile ONCE per run — loadPatterns re-reads and
   // recompiles the pattern file on every call, which a bulk import would
@@ -359,7 +360,11 @@ export async function runTranscriptsIngest(
 
         step = await gen.next();
       }
-      if (step.done && step.value) applyFileDiagnostics(step.value, fileOutcome, result);
+      if (step.done && step.value) {
+        applyFileDiagnostics(step.value, fileOutcome, result);
+        const hold = step.value.holdWatermarkBefore;
+        if (hold && (!watermarkCap || hold < watermarkCap)) watermarkCap = hold;
+      }
     } catch (err) {
       if (classifyItemFailure(err).scope === 'run') throw err;
       fileOutcome.error = err instanceof Error ? err.message : String(err);
@@ -371,6 +376,7 @@ export async function runTranscriptsIngest(
     opts.onFileDone?.(done, total, path);
   }
 
+  if (watermarkCap && result.maxSessionTs > watermarkCap) result.maxSessionTs = watermarkCap;
   if (opts.dryRun) result.cleanScan = false; // dry-runs never advance watermarks
   return result;
 }

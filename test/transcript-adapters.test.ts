@@ -558,6 +558,19 @@ describe('hermesAdapter', () => {
     expect(empty.sessions).toEqual([]);
     expect(empty.diag.expectedEmpty).toBe(true);
   });
+
+  test('watermark stays below a live session excluded by completedOnly', async () => {
+    const d = tdir();
+    const dbPath = buildHermesFixture(d);
+    const db = new Database(dbPath);
+    db.run("UPDATE sessions SET ended_at=started_at+60 WHERE id='hermes-fixture-2'");
+    db.close();
+    const r = await runTranscriptsIngest({} as never, {
+      paths: [dbPath], dryRun: true, completedOnly: true, sourceId: 'default', userPatternsPath: '/nonexistent',
+    });
+    // Session 1 is live with its last turn at 1785916810; session 2 (ended) is newer.
+    expect(r.maxSessionTs).toBe(new Date(1785916810 * 1000 - 1).toISOString());
+  });
 });
 
 // ── Grok adapter [chat_history.jsonl; sidecars skipped; no per-message times] ─
