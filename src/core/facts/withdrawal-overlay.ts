@@ -116,6 +116,12 @@ function ledgerClaim(rawClaim: string): string {
   return redactStoredText(rawClaim).toLowerCase().replace(/\s+/g, ' ').trim();
 }
 
+/** Claim forms hashed before the redaction fix (lowercased text, redacted or not), kept so enforcement only gets stricter. */
+function legacyClaims(rawClaim: string): string[] {
+  const lowered = rawClaim.toLowerCase();
+  return [lowered, redactStoredText(lowered), normalizeLoweredClaim(lowered), normalizeLoweredClaim(redactStoredText(lowered))];
+}
+
 /** Both fingerprints `overlayWithdrawalBody` looks a fence row's claim up by, taken from the ORIGINAL-case text. */
 export function fenceClaimHashes(rawTexts: readonly string[]): string[] {
   const hashes = new Set<string>();
@@ -127,6 +133,7 @@ export function fenceClaimHashes(rawTexts: readonly string[]): string[] {
         hashes.add(createHash('sha256').update(normalizeLoweredClaim(claim)).digest('hex'));
         hashes.add(createHash('sha256').update(claim).digest('hex'));
         hashes.add(createHash('sha256').update(redactStoredText(f.claim)).digest('hex'));
+        for (const legacy of legacyClaims(f.claim)) hashes.add(createHash('sha256').update(legacy).digest('hex'));
       }
     }
   }
@@ -176,7 +183,8 @@ export function overlayWithdrawalBody(body: string, normalizedBody: string, with
       if (claim === undefined) return [f];
       const entry = ledger.get(`${f.visibility}:${createHash('sha256').update(normalizeLoweredClaim(claim)).digest('hex')}`)
         ?? ledger.get(`${f.visibility}:${createHash('sha256').update(claim).digest('hex')}`)
-        ?? ledger.get(`${f.visibility}:${createHash('sha256').update(redactStoredText(f.claim)).digest('hex')}`);
+        ?? ledger.get(`${f.visibility}:${createHash('sha256').update(redactStoredText(f.claim)).digest('hex')}`)
+        ?? legacyClaims(f.claim).map(c => ledger.get(`${f.visibility}:${createHash('sha256').update(c).digest('hex')}`)).find(Boolean);
       if (!entry) return [f];
       changed = true;
       return entry.purged ? [] : [withdrawnFact(f, new Date(entry.withdrawn_at).toISOString().slice(0, 10))];
