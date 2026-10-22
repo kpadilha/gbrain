@@ -135,9 +135,11 @@ export async function prepareMemoryMutation(engine: BrainEngine, row: WriteReque
   }
   const validUntil = p.valid_until ? new Date(String(p.valid_until)) : null;
   const validFrom = new Date(String(p.valid_from));
-  const context = p.entity_inferred ? appendContextNote(null, inferenceNote(p.entity_inferred as InferredVia)) : undefined;
+  const callerContext = typeof p.context === 'string' ? p.context : null;
+  const context = p.entity_inferred ? appendContextNote(callerContext, inferenceNote(p.entity_inferred as InferredVia)) : callerContext ?? undefined;
   const fact: NewFact = { ...input, source: String(p.provenance).trim(), valid_from: validFrom, valid_until: validUntil,
     confidence: 1, embedding, embedding_model, source_session: typeof p.session_id === 'string' ? p.session_id : null,
+    event_type: typeof p.event_type === 'string' ? p.event_type : null,
     ...(context ? { context } : {}) };
   // #5575 B3: the row-level write gate at the request's declared tier (ENG-18); a held fact inserts nothing.
   const gate = decideFactWrite({ fact: input.fact, context: context ?? null, source: fact.source }, { sourceId: row.source_id, slug: row.slug,
@@ -199,6 +201,12 @@ export async function prepareMemoryMutation(engine: BrainEngine, row: WriteReque
     } else {
       const inserted = await tx.insertFact(fact, { source_id: row.source_id }); // gbrain-allow-direct-insert: journaled source-scoped semantic publication for subjectless or unresolved entity memory
       id = inserted.id;
+      // ponytail: event_type already exists in the schema and bulk/fence path;
+      // keep legacy insertFact compatible with pre-v89 migration sources.
+      if (fact.event_type) await tx.executeRaw(
+        'UPDATE facts SET event_type=$3 WHERE id=$1 AND source_id=$2',
+        [id, row.source_id, fact.event_type],
+      );
     }
     if (status === 'superseded') {
       await tx.executeRaw(`UPDATE facts SET expired_at=now(),superseded_by=$3
