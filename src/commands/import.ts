@@ -42,7 +42,7 @@ import { realpathOrResolve } from '../core/path-confine.ts';
 import { slog } from '../core/console-prefix.ts';
 import { refreshProjectionStatistics } from '../core/search/projection-statistics.ts';
 import { importAnalyzeEveryPages, maybeRefreshPlannerStats, PLANNER_STATS_REPAIR_COMMAND } from '../core/planner-stats.ts';
-import { importManagedFile, nextImportBatch, settleManagedImportBatch } from '../core/persistence/import-mutations.ts';
+import { importManagedDatabaseOnly, importManagedFile, nextImportBatch, settleManagedImportBatch } from '../core/persistence/import-mutations.ts';
 import { acceptedPendingReceipt } from '../core/persistence/accepted-pending.ts';
 import { estimateCostFromChars, lookupEmbeddingPrice } from '../core/embedding-pricing.ts';
 import { getEmbeddingModel } from '../core/ai/gateway.ts';
@@ -310,7 +310,7 @@ export async function runImport(
   const fresh = args.includes('--fresh');
   const jsonOutput = args.includes('--json');
   // #3969: opt back into per-poll ingest_log rows (default: no-op runs skip the write).
-  const logNoop = args.includes('--log-noop');
+  const logNoop = args.includes('--log-noop'), databaseOnly = args.includes('--database-only');
   const includeGitignored = args.includes('--include-gitignored') || opts.includeGitignored === true;
 
   // #3637: under --json, stdout belongs to the JSON document alone. The
@@ -502,7 +502,7 @@ export async function runImport(
   const dirArg = args.find((a, i) => !a.startsWith('--') && !flagValues.has(i));
 
   if (!dirArg) {
-    console.error('Usage: gbrain import <dir> [--no-embed] [--workers N] [--fresh] [--source <id> | --source-id <id>] [--include-gitignored] [--allow-noncanonical-root] [--json]');
+    console.error('Usage: gbrain import <dir> [--no-embed] [--workers N] [--fresh] [--source <id> | --source-id <id>] [--include-gitignored] [--allow-noncanonical-root] [--database-only] [--json]');
     throw new ImportAbortError('no import directory given');
   }
   // #1728: capture the import target ONCE as an absolute real path. Every
@@ -738,7 +738,7 @@ export async function runImport(
       // unreachable when the gate is off; defense-in-depth check anyway.
       if (settled?.status === 'rejected') throw settled.reason;
       const result = settled ? settled.value : company ? await importCompanyBrainFile(eng, filePath, sourceId!) : managedImport
-        ? await importManagedFile(eng, filePath, importRelPath, { noEmbed, sourceId, activePack: importActivePack, signal, slugRoot: opts.slugRoot })
+        ? await (databaseOnly ? importManagedDatabaseOnly : importManagedFile)(eng, filePath, importRelPath, { noEmbed, sourceId, activePack: importActivePack, signal, slugRoot: opts.slugRoot })
         : isImageFilePath(relativePath) && process.env.GBRAIN_EMBEDDING_MULTIMODAL === 'true'
         ? await importImageFile(eng, filePath, importRelPath, { noEmbed, sourceId })
         : await importFile(eng, filePath, importRelPath, { noEmbed, sourceId, activePack: importActivePack, bodyPolicy, firstCommitAt: firstCommits?.get(filePath) });
@@ -862,7 +862,7 @@ export async function runImport(
       // checks belt-and-suspenders so we never crash on a null assertion.
       const config = loadConfig();
       if (engine.kind === 'pglite' || !config?.database_url) {
-        for (let i = 0, batch: string[]; i < files.length && !signal?.aborted; i += batch.length) await processBatch(engine, batch = nextImportBatch(files, i, managedImport && !company));
+        for (let i = 0, batch: string[]; i < files.length && !signal?.aborted; i += batch.length) await processBatch(engine, batch = nextImportBatch(files, i, managedImport && !company && !databaseOnly));
       } else {
         const { PostgresEngine } = await import('../core/postgres-engine.ts');
         const { connectWithRetry, resolvePoolSize } = await import('../core/db.ts');
@@ -893,7 +893,7 @@ export async function runImport(
             try {
               while (!stopWorkers && !signal?.aborted) {
                 if (queueIndex >= files.length) break;
-                const batch = nextImportBatch(files, queueIndex, managedImport && !company); queueIndex += batch.length;
+                const batch = nextImportBatch(files, queueIndex, managedImport && !company && !databaseOnly); queueIndex += batch.length;
                 await processBatch(eng, batch);
               }
             } catch (error) {
@@ -920,7 +920,7 @@ export async function runImport(
       } // end else (postgres parallel)
     } else {
       // Sequential: use the provided engine
-      for (let i = 0, batch: string[]; i < files.length && !signal?.aborted; i += batch.length) await processBatch(engine, batch = nextImportBatch(files, i, managedImport && !company));
+      for (let i = 0, batch: string[]; i < files.length && !signal?.aborted; i += batch.length) await processBatch(engine, batch = nextImportBatch(files, i, managedImport && !company && !databaseOnly));
     }
   } catch (error) {
     workerFailed = true;
