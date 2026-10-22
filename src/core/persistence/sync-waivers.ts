@@ -8,6 +8,7 @@
 import { join } from 'node:path';
 import type { BrainEngine, PageSnapshot } from '../engine.ts';
 import type { GBrainConfig } from '../config.ts';
+import { OperationError } from '../ops/contract.ts';
 import { prepareManagedSyncMutation, type SyncIntent } from './sync-prepare.ts';
 import { heldGitPaths, readSyncImportProvenances, syncImportParserFor, recordSyncImportProvenances, syncDiskProvenance, type SyncImportProvenance, type SyncImportProvenanceBase } from './sync-holds.ts';
 import { sameParser } from './sync-prescreen.ts';
@@ -397,6 +398,21 @@ export async function unchangedSyncImport(engine: BrainEngine, cursor: WaiverCur
     return { kernel: inspected.waived ?? [], ...(prepared.importProvenance && !inspected.waived?.length ? { provenance: prepared.importProvenance } : {}) };
   } catch (error) {
     rethrowAbort(error, signal);
+    warnUnexpectedScreenRefusal(error);
     return null;
   }
+}
+
+const warnedScreenRefusals = new Set<string>();
+/**
+ * A content refusal or the budget only means "admit"; anything else (a revision conflict, which in a screen is the
+ * screen racing its own cursor or page, or a non-refusal error) is warned once per distinct cause, still admitting.
+ */
+function warnUnexpectedScreenRefusal(error: unknown): void {
+  if (error instanceof SyncPreparationBudgetExceeded || (error instanceof OperationError && error.code !== 'revision_conflict')) return;
+  // Keyed by class only: driver messages can carry slugs or values and vary per entry.
+  const cause = error instanceof OperationError ? error.code : error instanceof Error ? error.name : typeof error;
+  if (warnedScreenRefusals.has(cause)) return;
+  warnedScreenRefusals.add(cause);
+  console.warn(`[persistence] A no-op sync screen failed, so the entry is admitted instead of waived: ${cause}`);
 }

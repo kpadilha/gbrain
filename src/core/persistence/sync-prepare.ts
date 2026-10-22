@@ -410,9 +410,9 @@ async function resolveSyncOrigin(engine: BrainEngine, row: WriteRequest, p: Sync
  * so the member is released without a zombie statement pinning a connection until the ceiling.
  */
 /**
- * `screening.unsaved`: a waiver screen of a frozen entry the cursor does not yet name (a waiver run's head and followers).
- * Its validation also accepts this run's cursor with nothing pending; the waiver transaction then requires exactly that
- * cursor (run, index, nothing pending) under its lock.
+ * `screening.unsaved`: a waiver screen of a frozen entry the cursor does not yet name (a waiver run's head and followers,
+ * or a bulk group's follower while the cursor's pending is the group head). Its validation accepts any cursor of this
+ * run; the waiver transaction then requires exactly its cursor (run, index, pending) under its lock.
  */
 /**
  * #6349 (P4.4): a slice short of its target's end leaves `last_commit` where it was (the caller binds `from` back) and
@@ -718,7 +718,7 @@ async function prepareSyncMutation(unbounded: BrainEngine, row: WriteRequest, _c
         // #6513: a checkpoint whose cursor another run replaced is superseded, not conflicted; a page keeps `revision_conflict`.
         const replaced = checkpointCursorReplaced({ kind: p.kind, runId: p.runId ?? '' }, cursor?.run_id, row.source_id);
         if (replaced) throw syncPublicationRefusal(replaced.code, replaced.message, row, p, replaced.cause);
-        if (cursor && (cursor.run_id !== p.runId || (cursor.request_id !== row.request_id && !cursor.group?.includes(row.request_id) && !(screening?.unsaved && cursor.request_id == null)))) {
+        if (cursor && (cursor.run_id !== p.runId || (!screening?.unsaved && cursor.request_id !== row.request_id && !cursor.group?.includes(row.request_id)))) {
           throw cursorFenceRefusal(row, p, cursor);
         }
       },
