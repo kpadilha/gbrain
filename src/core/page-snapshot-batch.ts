@@ -88,7 +88,7 @@ export async function readPageSnapshotsBatch(
     const raw = (typeof row.snapshot_global_purges === 'string' ? JSON.parse(row.snapshot_global_purges) : row.snapshot_global_purges) as { count?: unknown; latest?: unknown } | null;
     const globalPurges: GlobalPurgeMarker = { count: Number(raw?.count ?? 0), latest: raw?.latest == null ? null : String(raw.latest), world_only: false };
     const withdrawals = [...row.snapshot_withdrawals as PageWithdrawal[], ...await resolveGlobalPurges(query, page.source_id, globalPurges,
-      [String(row.fingerprint_body ?? ''), String(row.fingerprint_timeline ?? '')])];
+      [page.compiled_truth, page.timeline])];
     if (!isSegmentedPage(page)) {
       page.compiled_truth = overlayWithdrawalBody(page.compiled_truth, String(row.fingerprint_body ?? ''), withdrawals);
       page.timeline = overlayWithdrawalBody(page.timeline, String(row.fingerprint_timeline ?? ''), withdrawals);
