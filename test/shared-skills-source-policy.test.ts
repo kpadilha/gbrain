@@ -131,3 +131,21 @@ test('connector and unapproved external sources cannot receive packaged content 
     } finally { await close(); rmSync(home, { recursive: true, force: true }); }
   });
 }, 120_000);
+
+test('a read-only mirror source gets no packaged skills and completes the migration', async () => {
+  const home = mkdtempSync(join(tmpdir(), 'gbrain-shared-no-writeback-')), root = join(home, 'repo');
+  await withEnv({ GBRAIN_HOME: home, DATABASE_URL: undefined, GBRAIN_DATABASE_URL: undefined }, async () => {
+    const { engine, close } = await isolatedSharedSkillsEngine();
+    try {
+      mkdirSync(root, { recursive: true });
+      const ctx: OperationContext = { engine, config: { engine: 'pglite' }, sourceId: 'default', remote: false, dryRun: false, logger: { info() {}, warn() {}, error() {} } };
+      await engine.executeRaw("UPDATE sources SET config='{\"mirror_read_only\":true}'::jsonb, local_path=$1 WHERE id='default'", [root]);
+      expect((await sharedSkillSourcePolicy(engine, 'default')).mode).toBe('preserve_files');
+      const migration = await runSharedSkillsMigration(ctx);
+      expect(migration.sources[0].status).toBe('complete');
+      expect(migration.sources[0].stages[0].reason).toContain('source_writeback_disabled');
+      await expect(installPackagedSharedSkills(ctx, 'default')).rejects.toMatchObject({ code: 'source_writeback_required' });
+      expect(readdirSync(root)).toEqual([]);
+    } finally { await close(); rmSync(home, { recursive: true, force: true }); }
+  });
+}, 120_000);
