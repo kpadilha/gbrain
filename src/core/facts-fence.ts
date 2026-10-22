@@ -49,6 +49,7 @@ import {
   assertFenceRewritable,
 } from './fence-shared.ts';
 import { findLineOutsideFencedCode, locateOutsideCode, protectedRegions, unclosedCodeFenceStart } from './fence-scan.ts';
+import { redactStoredText } from './secret-scan.ts';
 
 // HTML-comment fence markers — verbatim per spec. Same shape as the takes
 // fence markers so anyone who's seen one immediately recognizes the other.
@@ -621,15 +622,15 @@ export function upsertFactRow(body: string, newRow: NewFactRow): { body: string;
 function factRow(newRow: NewFactRow, rowNum: number): ParsedFact {
   return {
     rowNum,
-    claim: newRow.claim,
+    claim: redactStoredText(newRow.claim),
     kind: newRow.kind,
     confidence: newRow.confidence,
     visibility: newRow.visibility,
     notability: newRow.notability,
     validFrom: newRow.validFrom,
     validUntil: newRow.validUntil,
-    source: newRow.source,
-    context: newRow.context,
+    source: newRow.source === undefined ? undefined : redactStoredText(newRow.source),
+    context: newRow.context === undefined ? undefined : redactStoredText(newRow.context),
     active: newRow.active ?? true,
     // v0.35.4 — typed-claim pass-through. When undefined the renderer
     // stays at the 10-cell shape so unrelated edits don't widen the

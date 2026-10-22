@@ -1462,3 +1462,17 @@ export function redactFindings(
   const plan = planRedaction(text, opts);
   return { text: applyRedaction(plan), redactions: plan.redactions, echoValues: plan.echoValues };
 }
+
+/** Write-time redaction for persisted memory text, with the transcript options; idempotent. */
+export function redactStoredText(text: string): string {
+  return redactFindings(text, { highEntropy: true }).text;
+}
+
+const FACT_TEXT_COLUMNS = ['source', 'context', 'claim_metric', 'claim_unit', 'claim_period', 'attributed_to', 'event_type', 'source_session'] as const;
+
+/** Redacts a fact's free-text columns; numeric and structured fields pass through. */
+export function redactFactText<T extends { fact: string }>(f: T): T {
+  const out: Record<string, unknown> = { ...f, fact: redactStoredText(f.fact) };
+  for (const key of FACT_TEXT_COLUMNS) if (typeof out[key] === 'string') out[key] = redactStoredText(out[key] as string);
+  return out as T;
+}

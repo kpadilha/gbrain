@@ -194,13 +194,16 @@ const ontology_propose: Operation = {
     const { resolveVisibilityParam } = await import('../facts/visibility.ts');
     const { coordinatedDatabaseWrite } = await import('../persistence/database-write.ts');
     const entitySlug = String(p.entity);
+    const { redactStoredText } = await import('../secret-scan.ts');
+    const dimension = redactStoredText(String(p.dimension));
+    const source = redactStoredText(typeof p.source === 'string' && p.source ? p.source : 'manual');
     const visibility = await resolveVisibilityParam(ctx.engine, p.visibility);
     const merge = (engine: typeof ctx.engine, sourceId: string | undefined) => engine.mergeOntologyFact({
       entitySlug,
-      dimension: String(p.dimension),
-      value: String(p.value),
+      dimension,
+      value: redactStoredText(String(p.value)),
       confidence: typeof p.confidence === 'number' ? p.confidence : undefined,
-      source: typeof p.source === 'string' && p.source ? p.source : 'manual',
+      source,
       validFrom: typeof p.valid_from === 'string' ? p.valid_from : undefined,
       validTo: typeof p.valid_to === 'string' ? p.valid_to : undefined,
       visibility,
@@ -213,14 +216,14 @@ const ontology_propose: Operation = {
     const trust = ontologyWriteTrust(ctx);
     const guarded = async (engine: typeof ctx.engine, sourceId: string | undefined) => {
       const result = await merge(engine, sourceId);
-      return { ...result, ...await contestOntologySupersession(engine, sourceId ?? 'default', entitySlug, String(p.dimension), result) };
+      return { ...result, ...await contestOntologySupersession(engine, sourceId ?? 'default', entitySlug, dimension, result) };
     };
     // W1 #6783 §5.1: the observation's rows live in its provenance's stream and in the closed stint's, so those keys are held too.
     const { ontologyStreamSlugs, beliefTransaction } = await import('../belief/writers.ts');
     const { withWriteAttribution } = await import('../persistence/context.ts');
     const { maintenanceAttribution } = await import('../persistence/attribution.ts');
     const sourceId = ctx.sourceId ?? 'default';
-    const slugs = await ontologyStreamSlugs(ctx.engine, sourceId, entitySlug, String(p.dimension), typeof p.source === 'string' && p.source ? p.source : 'manual');
+    const slugs = await ontologyStreamSlugs(ctx.engine, sourceId, entitySlug, dimension, source);
     const managed = await coordinatedDatabaseWrite(ctx, 'ontology_propose', entitySlug, slugs, guarded, trust);
     if (managed) return managed.value;
     const attribution = { ...await maintenanceAttribution(ctx.engine), trust };

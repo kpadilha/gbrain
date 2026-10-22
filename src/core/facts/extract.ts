@@ -23,6 +23,7 @@
  * gateway-down errors are absorbed into NULL-embedding rows.
  */
 
+import { redactStoredText } from '../secret-scan.ts';
 import { observationDateLine, observationDateRule, parseExtractedEventDate, type ObservationDate } from '../ai/date-grounding.ts';
 import { chat, embedOne, isAvailable, getEmbeddingModel } from '../ai/gateway.ts';
 import { classifyGlobalLlmError } from '../ai/errors.ts';
@@ -815,7 +816,7 @@ export async function extractFactsFromTurnWithOutcome(
     try {
       if (embedFacts) {
         embeddingModel = input.embedding?.model ?? getEmbeddingModel();
-        embedding = await embedOne(factText, { abortSignal: input.abortSignal, inputType: 'document', embeddingModel,
+        embedding = await embedOne(redactStoredText(factText), { abortSignal: input.abortSignal, inputType: 'document', embeddingModel,
           ...(input.embedding ? { embeddingModel: input.embedding.model, dimensions: input.embedding.dimensions } : {}) });
       }
     } catch (err) {
