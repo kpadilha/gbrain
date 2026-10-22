@@ -13,7 +13,7 @@ import { SCREENING_SHARED_READS, batchSharedReads, emitFenceNotice, importWriteR
 import { admitBatch } from './page-batch.ts';
 import { writeOutcomeUnknown } from './admission-retry.ts';
 import { assertPersistenceAccepting, waitForWrites } from './service.ts';
-import { getWriteRequest, type WriteAdmission } from './journal.ts';
+import { getWriteRequest, intentDigest, type WriteAdmission } from './journal.ts';
 import type { WriteRequest } from './model.ts';
 import { digest, sha256 } from './digest.ts';
 import { assertImportPaths, managedImportContent, managedStreamedIdentity, prepareManagedImportMutation, readImportBytes, type ImportPack, type ManagedImportBodyRef,
@@ -177,9 +177,11 @@ export async function importManagedDatabaseOnly(engine: BrainEngine, filePath: s
   if (!current || current.state !== 'active' || String(current.owner_epoch) !== String(owner.binding!.owner_epoch)) {
     throw new OperationError('owner_unavailable', 'The import owner changed.');
   }
-  const r = await submitPageMutation(ctx, { operation: 'put_page', waitMs: IMPORT_WAIT_MS, databaseOnly: 'database_only_import', params: {
-    request_id: requestId, source_id: owner.sourceId, slug, content, allow_empty: true, ingested_via: 'cli:import',
-    ...(snapshot ? { expected_revision: snapshot.revision } : {}) } });
+  // Receipts are permanent and the id is deterministic: a receipt written without `database_only` (v0.60.299) replays in that shape, any other in the v0.60.177 shape.
+  const intent = (legacy: boolean) => ({ source_id: owner.sourceId, slug, content, ...(legacy ? { database_only: true } : {}), allow_empty: true, ingested_via: 'cli:import',
+    ...(snapshot ? { expected_revision: snapshot.revision } : {}) });
+  const modern = !!prior && prior.digest === intentDigest({ operation: 'put_page', sourceId: owner.sourceId, slug, callerIntent: intent(false) });
+  const r = await submitPageMutation(ctx, { operation: 'put_page', waitMs: IMPORT_WAIT_MS, databaseOnly: 'explicit_local_db_only', params: { request_id: requestId, ...intent(!modern) } });
   return { slug: typeof r.slug === 'string' && r.slug ? r.slug : slug,
     status: r.noop === true || r.status === 'duplicate' ? 'skipped' : 'imported', chunks: Number(r.chunks ?? 0) };
 }
