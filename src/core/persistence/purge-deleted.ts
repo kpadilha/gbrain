@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { BrainEngine } from '../engine.ts';
 import { loadConfig } from '../config.ts';
-import type { OperationContext } from '../ops/contract.ts';
+import { OperationError, type OperationContext } from '../ops/contract.ts';
 import { requireConsent, type ConsentRequest } from '../consent.ts';
 import { managedPersistenceEnabled } from './ownership.ts';
 import { requestPrincipalForContext, submitPageMutation } from './page-mutations.ts';
@@ -17,6 +17,8 @@ import { writerOnboardingPreflight } from './onboarding.ts';
 import { clearPurgePark, isParked, notePurgeSourceWriter, PURGE_PARK_LIMIT, purgeParkKey, prunePurgeParks, readPurgeParks, recordPurgeFailure, type PurgePark } from './purge-parks.ts';
 import { ItemRun, type ItemFailure } from '../item-failure.ts';
 import { readUnreviewedSyncTombstones, syncDeleteHeld } from './sync-delete-tombstones.ts';
+import { currentSubmissionAuthority } from '../minions/submission-authority.ts';
+import { currentVerifiedLocalWriter } from './identity.ts';
 
 /** A tombstone that moved under a concurrent writer; the next run retries it. */
 const DEFERRAL_CODES = new Set(['revision_conflict', 'page_not_found', 'page_identity_changed']);
@@ -287,6 +289,12 @@ export function purgePhaseNote(result: DeletedPagePurge): string {
  * reported `held` (code `sync_delete_unreviewed`). The consented manual purge leaves `automatic` unset.
  */
 export async function purgeDeletedPagesCoordinated(engine: BrainEngine, olderThanHours: number, opts: { retryParked?: boolean; automatic?: boolean } = {}): Promise<DeletedPagePurge> {
+  // Same trust rule as `delete --purge` (purge-params.ts): remote jobs never purge.
+  const job = currentSubmissionAuthority();
+  if ((job && job.kind !== 'application') || currentVerifiedLocalWriter()?.remote) {
+    throw new OperationError('permission_denied', 'purge is only available to the local CLI.',
+      'Remote callers soft-delete only; run `gbrain pages purge-deleted` on the host.');
+  }
   if (!await managedPersistenceEnabled(engine)) {
     // #7130: a brain deactivated after managed syncs keeps their tombstones' records and receipts, so the hold applies here too.
     const kept = opts.automatic ? await readUnreviewedSyncTombstones(engine, olderThanHours) : [];
