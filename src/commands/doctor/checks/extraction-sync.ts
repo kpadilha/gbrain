@@ -8,6 +8,7 @@ import { join } from 'path';
 import { existsSync, readdirSync } from 'fs';
 import type { BrainEngine } from '../../../core/engine.ts';
 import { probeSourceGitState } from '../../../core/git-head.ts';
+import { isDetachedHead } from '../../../core/sync-git.ts';
 // v0.41.32.0: remote staleness reads the stored newest_content_at column via
 // this pure comparator (no git subprocess on the HTTP MCP doctor path).
 import { lagFromContentMs, loadSyncFreshnessSources, resolveStalenessCeilingSeconds } from '../../../core/source-health.ts';
@@ -1276,6 +1277,9 @@ export async function checkSyncFreshness(
     let upstream_unknown_count = 0, upstream_behind_count = 0;
     const staleIds: string[] = [];
     const stoppedConnectors = await stoppedConnectorIssues(engine, sources, now - failMs).catch(() => new Map());
+    // Sync imports the working tree only when HEAD is detached or `sync.include_working_tree` is set (sync/preflight.ts).
+    let includeWorkingTree = false;
+    try { includeWorkingTree = (await engine.getConfig('sync.include_working_tree')) === 'true'; } catch { /* commit-driven default */ }
     for (const source of sources) {
       if (ownedContent.has(source.id)) { writer_owned_count++; continue; }
       if (catalogPacks.ids.has(source.id)) { read_only_pack_count++; continue; }
@@ -1386,12 +1390,15 @@ export async function checkSyncFreshness(
       // masked (D7): it disables the fallback too.
       let cloneUnavailable = false;
       if (localOnly) {
+        // A tracked uncommitted change is work only when sync imports the working tree; otherwise sync reports it as drift.
+        const importsWorkingTree = includeWorkingTree || (source.local_path !== null && isDetachedHead(source.local_path));
         const gitState = probeSourceGitState(
           source.local_path,
           source.last_commit,
-          { requireCleanWorkingTree: 'ignore-untracked' },
+          importsWorkingTree ? { requireCleanWorkingTree: 'ignore-untracked' } : undefined,
         );
-        const chunkerMatch = source.chunker_version === currentChunkerVersion;
+        // NULL (never stamped) and any stamp under managed sync, which never reads sources.chunker_version, are not work.
+        const chunkerMatch = managed || source.chunker_version === null || source.chunker_version === currentChunkerVersion;
         if (gitState === 'unchanged' && chunkerMatch) {
           unchanged_count++;
           continue;
