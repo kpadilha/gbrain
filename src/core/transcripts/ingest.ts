@@ -75,6 +75,8 @@ export interface TranscriptsIngestOpts {
   limit?: number;
   /** Only sessions whose LAST message is strictly newer than this ISO. */
   sinceIso?: string;
+  /** Import only sessions the source marks complete (used by --since last). */
+  completedOnly?: boolean;
   /** Resolved source id — threads through import, raw-data, reconciliation. */
   sourceId: string;
   /** Embedding opt-in (default OFF: bulk imports defer to the embed backfill). */
@@ -225,6 +227,7 @@ export async function runTranscriptsIngest(
     maxSessionTs: '',
   };
   let limitTruncated = false;
+  let watermarkCap = '';
 
   // Redaction patterns compile ONCE per run — loadPatterns re-reads and
   // recompiles the pattern file on every call, which a bulk import would
@@ -265,8 +268,9 @@ export async function runTranscriptsIngest(
 
     // gbrain#4149: thread the explicit cap override; omit the opts object
     // entirely when unset so adapters keep their native defaults.
-    const gen = opts.maxBytes != null
-      ? detected.adapter.parse(path, { maxBytes: opts.maxBytes })
+    const parseOpts = { maxBytes: opts.maxBytes, sinceIso: opts.sinceIso, completedOnly: opts.completedOnly };
+    const gen = Object.values(parseOpts).some(value => value != null)
+      ? detected.adapter.parse(path, parseOpts)
       : detected.adapter.parse(path);
     try {
       let step = await gen.next();
@@ -367,7 +371,11 @@ export async function runTranscriptsIngest(
 
         step = await gen.next();
       }
-      if (step.done && step.value) applyFileDiagnostics(step.value, fileOutcome, result);
+      if (step.done && step.value) {
+        applyFileDiagnostics(step.value, fileOutcome, result);
+        const hold = step.value.holdWatermarkBefore;
+        if (hold && (!watermarkCap || hold < watermarkCap)) watermarkCap = hold;
+      }
     } catch (err) {
       if (classifyItemFailure(err).scope === 'run') throw err;
       fileOutcome.error = err instanceof Error ? err.message : String(err);
@@ -379,6 +387,7 @@ export async function runTranscriptsIngest(
     opts.onFileDone?.(done, total, path);
   }
 
+  if (watermarkCap && result.maxSessionTs > watermarkCap) result.maxSessionTs = watermarkCap;
   if (opts.dryRun) result.cleanScan = false; // dry-runs never advance watermarks
   return result;
 }

@@ -81,6 +81,8 @@ export interface FileDiagnostics {
    * drift — ingest must not freeze the watermark.
    */
   expectedEmpty?: boolean;
+  /** Incremental watermark must stay at or below this ISO: an excluded live session ends later. */
+  holdWatermarkBefore?: string;
   /**
    * E-N4: the file yielded assistant turns but not one user turn. The usual
    * cause is a host format change the parser no longer recognizes (#5163), so
@@ -102,6 +104,10 @@ export interface ParseSessionsOpts {
    * read, so an over-budget rollout still imports.
    */
   maxBytes?: number;
+  /** Adapter-side lower bound for stores that can filter before materializing sessions. */
+  sinceIso?: string;
+  /** Incremental archives wait for a session to end instead of rewriting a live transcript. */
+  completedOnly?: boolean;
 }
 
 export interface TranscriptAdapter {

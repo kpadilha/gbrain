@@ -568,6 +568,34 @@ describe('hermesAdapter', () => {
     writeFileSync(fake, 'not a database');
     expect(hermesAdapter.detect(fake, readSample(fake))).toBe(false);
   });
+
+  test('pushes incremental cutoff and completed-session filtering into SQLite', async () => {
+    const d = tdir();
+    const dbPath = buildHermesFixture(d);
+    const db = new Database(dbPath);
+    db.run("UPDATE sessions SET ended_at=started_at+60 WHERE id='hermes-fixture-2'");
+    db.close();
+    const cutoff = '2026-08-05T23:59:59.000Z';
+    const { sessions, diag } = await drain(hermesAdapter.parse(dbPath, { sinceIso: cutoff, completedOnly: true }));
+    expect(sessions.map(s => s.meta.sessionId)).toEqual(['hermes-fixture-2']);
+    expect(diag.expectedEmpty).toBeUndefined();
+    const empty = await drain(hermesAdapter.parse(dbPath, { sinceIso: '2100-01-01T00:00:00Z', completedOnly: true }));
+    expect(empty.sessions).toEqual([]);
+    expect(empty.diag.expectedEmpty).toBe(true);
+  });
+
+  test('watermark stays below a live session excluded by completedOnly', async () => {
+    const d = tdir();
+    const dbPath = buildHermesFixture(d);
+    const db = new Database(dbPath);
+    db.run("UPDATE sessions SET ended_at=started_at+60 WHERE id='hermes-fixture-2'");
+    db.close();
+    const r = await runTranscriptsIngest({} as never, {
+      paths: [dbPath], dryRun: true, completedOnly: true, sourceId: 'default', userPatternsPath: '/nonexistent',
+    });
+    // Session 1 is live with its last turn at 1785916810; session 2 (ended) is newer.
+    expect(r.maxSessionTs).toBe(new Date(1785916810 * 1000 - 1).toISOString());
+  });
 });
 
 // ── Grok adapter [chat_history.jsonl; sidecars skipped; no per-message times] ─

@@ -101,6 +101,7 @@ interface SessionRow {
   cwd: string | null;
   model: string | null;
   source: string | null;
+  ended_at: number | null;
 }
 
 interface MessageRow {
@@ -142,6 +143,7 @@ export const hermesAdapter: TranscriptAdapter = {
     const tmp = mkdtempSync(join(tmpdir(), 'gbrain-hermes-'));
     const copyPath = join(tmp, basename(path));
     let sessions = 0;
+    let holdWatermarkBefore: string | undefined;
     try {
       copyFileSync(path, copyPath);
       for (const suffix of ['-wal', '-shm']) {
@@ -152,12 +154,27 @@ export const hermesAdapter: TranscriptAdapter = {
       try {
         let sessionRows: SessionRow[];
         try {
-          sessionRows = db
-            .query<SessionRow, []>(
-              'SELECT id, title, display_name, started_at, cwd, model, source ' +
-                'FROM sessions ORDER BY started_at',
-            )
-            .all();
+          const cutoff = opts.sinceIso ? Date.parse(opts.sinceIso) / 1000 : undefined;
+          if (cutoff !== undefined && !Number.isFinite(cutoff)) throw new Error(`invalid since timestamp: ${opts.sinceIso}`);
+          const where = [
+            ...(opts.completedOnly ? ['s.ended_at IS NOT NULL'] : []),
+            ...(cutoff !== undefined ? [
+              "EXISTS (SELECT 1 FROM messages m WHERE m.session_id=s.id AND m.role IN ('user','assistant') AND m.timestamp>?)",
+            ] : []),
+          ];
+          const sql = 'SELECT s.id, s.title, s.display_name, s.started_at, s.cwd, s.model, s.source, s.ended_at ' +
+            'FROM sessions s' + (where.length ? ` WHERE ${where.join(' AND ')}` : '') + ' ORDER BY s.started_at';
+          sessionRows = cutoff === undefined
+            ? db.query<SessionRow, []>(sql).all()
+            : db.query<SessionRow, [number]>(sql).all(cutoff);
+          if (opts.completedOnly) {
+            // A live session stays unimported, so the watermark must stay below its newest turn to catch it once it ends.
+            const live = db.query<{ t: number | null }, [number]>(
+              "SELECT MIN(last) AS t FROM (SELECT MAX(m.timestamp) AS last FROM sessions s JOIN messages m ON m.session_id=s.id " +
+              "WHERE s.ended_at IS NULL AND m.role IN ('user','assistant') GROUP BY s.id HAVING MAX(m.timestamp)>?)",
+            ).get(cutoff ?? 0);
+            if (typeof live?.t === 'number' && live.t > 0) holdWatermarkBefore = new Date(Math.round(live.t * 1000) - 1).toISOString();
+          }
         } catch (err) {
           // Missing/renamed tables = host schema drift, not a crash.
           return {
@@ -217,6 +234,8 @@ export const hermesAdapter: TranscriptAdapter = {
       sessions,
       zeroSessionsReason:
         sessions === 0 ? 'no sessions with user/assistant text messages in store' : undefined,
+      expectedEmpty: sessions === 0 && Boolean(opts.sinceIso || opts.completedOnly) ? true : undefined,
+      holdWatermarkBefore,
     };
   },
 };
